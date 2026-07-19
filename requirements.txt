@@ -10,3 +10,5 @@ pdfplumber>=0.10.0
 openpyxl>=3.1.0
 google-generativeai>=0.3.0
 yt-dlp>=2024.3.10
+imageio>=2.30.0
+imageio-ffmpeg>=0.4.8

@@ -112,6 +112,10 @@ def get_image_keyboard():
             InlineKeyboardButton("🎨 Grayscale Filter", callback_data="action:img_grayscale"),
         ],
         [
+            InlineKeyboardButton("🎞️ Video to GIF", callback_data="action:video2gif"),
+            InlineKeyboardButton("🖼️ Images to GIF", callback_data="action:images2gif"),
+        ],
+        [
             InlineKeyboardButton("« Back to Main Menu", callback_data="menu:main")
         ]
     ]
@@ -537,6 +541,8 @@ async def start_action_command(update: Update, context: ContextTypes.DEFAULT_TYP
         "img_compress": "📉 **Compress Image**\nPlease upload the photo you want to compress (JPG or PNG).",
         "img_convert": "🔄 **Convert Format**\nPlease upload the photo you want to convert (JPG or PNG).",
         "img_grayscale": "🎨 **Grayscale Filter**\nPlease upload the photo you want to apply grayscale to (JPG or PNG).",
+        "video2gif": "🎞️ **Video to GIF**\nPlease upload the video file you want to convert to an animated GIF.",
+        "images2gif": "🖼️ **Images to GIF**\nPlease upload **multiple images** (JPG/PNG). Once you have uploaded all frames, click the **Generate GIF** button below.",
     }
     
     prompt = prompt_texts.get(action, "Please upload your document.")
@@ -550,6 +556,11 @@ async def start_action_command(update: Update, context: ContextTypes.DEFAULT_TYP
     elif action == "images2pdf":
         keyboard = InlineKeyboardMarkup([[
             InlineKeyboardButton("➕ Convert Now", callback_data="process:convert_images"),
+            InlineKeyboardButton("❌ Cancel", callback_data="btn:cancel"),
+        ]])
+    elif action == "images2gif":
+        keyboard = InlineKeyboardMarkup([[
+            InlineKeyboardButton("🖼️ Generate GIF", callback_data="process:generate_gif_now"),
             InlineKeyboardButton("❌ Cancel", callback_data="btn:cancel"),
         ]])
     else:
@@ -616,6 +627,8 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "img_compress": "📉 **Compress Image**\nPlease upload the photo you want to compress (JPG or PNG).",
             "img_convert": "🔄 **Convert Format**\nPlease upload the photo you want to convert (JPG or PNG).",
             "img_grayscale": "🎨 **Grayscale Filter**\nPlease upload the photo you want to apply grayscale to (JPG or PNG).",
+            "video2gif": "🎞️ **Video to GIF**\nPlease upload the video file you want to convert to an animated GIF.",
+            "images2gif": "🖼️ **Images to GIF**\nPlease upload **multiple images** (JPG/PNG). Once you have uploaded all frames, click the **Generate GIF** button below.",
         }
         
         prompt = prompt_texts.get(action, "Please upload your document.")
@@ -630,6 +643,11 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         elif action == "images2pdf":
             keyboard = InlineKeyboardMarkup([[
                 InlineKeyboardButton("➕ Convert Now", callback_data="process:convert_images"),
+                InlineKeyboardButton("❌ Cancel", callback_data="btn:cancel"),
+            ]])
+        elif action == "images2gif":
+            keyboard = InlineKeyboardMarkup([[
+                InlineKeyboardButton("🖼️ Generate GIF", callback_data="process:generate_gif_now"),
                 InlineKeyboardButton("❌ Cancel", callback_data="btn:cancel"),
             ]])
         else:
@@ -654,6 +672,13 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             return
         # Go to layout selection for the images PDF
         await start_layout_config_flow(query, session)
+        
+    elif data == "process:generate_gif_now":
+        session = get_session(chat_id, user_id)
+        if len(session["files"]) < 2:
+            await context.bot.send_message(chat_id, "⚠️ Please upload at least 2 images to generate a GIF!")
+            return
+        await execute_operation(query, session, chat_id, user_id, context)
         
     # 5. Layout Setup Callbacks
     elif data.startswith("layout:"):
@@ -1231,14 +1256,34 @@ async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if session["step"] != "waiting_for_files":
         return
         
-    doc = update.message.document
-    file_ext = os.path.splitext(doc.file_name)[1].lower() if doc.file_name else ""
+    doc_obj = update.message.document
+    video_obj = update.message.video
+    anim_obj = update.message.animation
+    
+    file_id = None
+    file_name = None
+    
+    if doc_obj:
+        file_id = doc_obj.file_id
+        file_name = doc_obj.file_name
+    elif video_obj:
+        file_id = video_obj.file_id
+        file_name = getattr(video_obj, "file_name", None) or "video.mp4"
+    elif anim_obj:
+        file_id = anim_obj.file_id
+        file_name = getattr(anim_obj, "file_name", None) or "animation.mp4"
+        
+    if not file_id:
+        await update.message.reply_text("⚠️ Could not detect any valid document or video file.")
+        return
+        
+    file_ext = os.path.splitext(file_name)[1].lower() if file_name else ""
     
     # Download the document
     await update.message.reply_chat_action("upload_document")
     try:
-        new_file = await context.bot.get_file(doc.file_id)
-        local_path = os.path.join(session["temp_dir"], doc.file_name)
+        new_file = await context.bot.get_file(file_id)
+        local_path = os.path.join(session["temp_dir"], file_name)
         await new_file.download_to_drive(local_path)
         session["files"].append(local_path)
     except Exception as e:
@@ -1258,7 +1303,7 @@ async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE):
             ]
         ])
         await update.message.reply_text(
-            f"📥 Received `{doc.file_name}`.\n\nTotal files to merge: **{len(session['files'])}**.\nUpload another PDF or click Merge Now.",
+            f"📥 Received `{file_name}`.\n\nTotal files to merge: **{len(session['files'])}**.\nUpload another PDF or click Merge Now.",
             reply_markup=keyboard,
             parse_mode="Markdown"
         )
@@ -1286,6 +1331,32 @@ async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE):
         # Proceed to layout selection
         prompt_msg = await update.message.reply_text("⏳ Processing file uploads...")
         await start_layout_config_flow(prompt_msg, session)
+        
+    elif action == "video2gif":
+        valid_video_exts = [".mp4", ".mov", ".m4v", ".avi", ".mkv", ".webm", ".3gp"]
+        if file_ext not in valid_video_exts:
+            await update.message.reply_text("⚠️ Invalid file type! Please upload a video file.")
+            session["files"].pop()
+            return
+        await update.message.reply_text("⏳ Processing video-to-GIF conversion...")
+        await execute_operation(update.message, session, chat_id, user_id, context)
+        
+    elif action == "images2gif":
+        if file_ext not in [".jpg", ".jpeg", ".png"]:
+            await update.message.reply_text("⚠️ Invalid file type! Please upload a JPG or PNG image.")
+            session["files"].pop()
+            return
+        keyboard = InlineKeyboardMarkup([
+            [
+                InlineKeyboardButton("🖼️ Generate GIF", callback_data="process:generate_gif_now"),
+                InlineKeyboardButton("❌ Cancel", callback_data="btn:cancel"),
+            ]
+        ])
+        await update.message.reply_text(
+            f"🖼️ Frame received! Total frames: **{len(session['files'])}**.\nSend more images or click Generate GIF.",
+            reply_markup=keyboard,
+            parse_mode="Markdown"
+        )
         
     elif action in ["pdf2word", "pdf2ppt", "pdf2excel", "pdf2images", "layout_settings", "split", "rotate", "pdf_compress"]:
         if file_ext != ".pdf":
@@ -1395,7 +1466,7 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await proceed_image_setup(update.message, session, context)
         return
 
-    if session["action"] != "images2pdf" or session["step"] != "waiting_for_files":
+    if session["action"] not in ["images2pdf", "images2gif"] or session["step"] != "waiting_for_files":
         return
         
     await update.message.reply_chat_action("upload_document")
@@ -1410,17 +1481,30 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await update.message.reply_text("❌ Error downloading image.")
         return
         
-    keyboard = InlineKeyboardMarkup([
-        [
-            InlineKeyboardButton("➕ Convert Now", callback_data="process:convert_images"),
-            InlineKeyboardButton("❌ Cancel", callback_data="btn:cancel"),
-        ]
-    ])
-    await update.message.reply_text(
-        f"🖼️ Image received! Total images: **{len(session['files'])}**.\nSend more images or click Convert Now.",
-        reply_markup=keyboard,
-        parse_mode="Markdown"
-    )
+    if session["action"] == "images2gif":
+        keyboard = InlineKeyboardMarkup([
+            [
+                InlineKeyboardButton("🖼️ Generate GIF", callback_data="process:generate_gif_now"),
+                InlineKeyboardButton("❌ Cancel", callback_data="btn:cancel"),
+            ]
+        ])
+        await update.message.reply_text(
+            f"🖼️ Image received! Total frames: **{len(session['files'])}**.\nSend more images or click Generate GIF.",
+            reply_markup=keyboard,
+            parse_mode="Markdown"
+        )
+    else:
+        keyboard = InlineKeyboardMarkup([
+            [
+                InlineKeyboardButton("➕ Convert Now", callback_data="process:convert_images"),
+                InlineKeyboardButton("❌ Cancel", callback_data="btn:cancel"),
+            ]
+        ])
+        await update.message.reply_text(
+            f"🖼️ Image received! Total images: **{len(session['files'])}**.\nSend more images or click Convert Now.",
+            reply_markup=keyboard,
+            parse_mode="Markdown"
+        )
 
 # --- Text Message Input Handler (Config States) ---
 
@@ -1677,6 +1761,35 @@ async def execute_operation(msg_or_query, session, chat_id, user_id, context):
             from compress_utils import compress_pdf
             compress_pdf(input_file, output_path, level=level)
             
+        elif action == "video2gif":
+            input_file = files[0]
+            output_filename = os.path.splitext(os.path.basename(input_file))[0] + ".gif"
+            output_path = os.path.join(temp_dir, output_filename)
+            await notify("⏳ Converting video to GIF...")
+            from gif_utils import video_to_gif
+            import asyncio
+            loop = asyncio.get_running_loop()
+            await loop.run_in_executor(None, lambda: video_to_gif(input_file, output_path))
+            
+            await notify("📤 Sending animation back to you...")
+            with open(output_path, "rb") as f:
+                await context.bot.send_animation(chat_id, f, filename=output_filename, caption="🎞️ Converted Video to Animated GIF!")
+            clear_session(chat_id, user_id)
+            return
+            
+        elif action == "images2gif":
+            output_filename = "animated_images.gif"
+            output_path = os.path.join(temp_dir, output_filename)
+            await notify("⏳ Combining images to GIF...")
+            from gif_utils import images_to_gif
+            images_to_gif(files, output_path, duration=500)
+            
+            await notify("📤 Sending animation back to you...")
+            with open(output_path, "rb") as f:
+                await context.bot.send_animation(chat_id, f, filename=output_filename, caption="🖼️ Combined Images to Animated GIF!")
+            clear_session(chat_id, user_id)
+            return
+            
         elif action == "ppt2images":
             input_file = files[0]
             output_subdir = os.path.join(temp_dir, "ppt_slides")
@@ -1787,6 +1900,8 @@ async def post_init(application):
         BotCommand("download", "Download social media videos (YouTube, TikTok, etc.)"),
         BotCommand("choose", "Randomly select one option from a list"),
         BotCommand("trivia", "Start a group AI quiz poll game"),
+        BotCommand("video_to_gif", "Convert a video clip into animated GIF"),
+        BotCommand("images_to_gif", "Combine multiple images into animated GIF"),
     ]
     await application.bot.set_my_commands(commands)
 
@@ -1829,6 +1944,8 @@ def main():
     async def cmd_img_convert(u, c): await start_action_command(u, c, "img_convert")
     async def cmd_img_grayscale(u, c): await start_action_command(u, c, "img_grayscale")
     async def cmd_pdf_compress(u, c): await start_action_command(u, c, "pdf_compress")
+    async def cmd_video2gif(u, c): await start_action_command(u, c, "video2gif")
+    async def cmd_images2gif(u, c): await start_action_command(u, c, "images2gif")
 
     app.add_handler(CommandHandler("merge", cmd_merge))
     app.add_handler(CommandHandler("split", cmd_split))
@@ -1837,6 +1954,10 @@ def main():
     app.add_handler(CommandHandler("layout_settings", cmd_layout))
     app.add_handler(CommandHandler("pdf_compress", cmd_pdf_compress))
     app.add_handler(CommandHandler("compress", cmd_pdf_compress))
+    app.add_handler(CommandHandler("video_to_gif", cmd_video2gif))
+    app.add_handler(CommandHandler("video2gif", cmd_video2gif))
+    app.add_handler(CommandHandler("images_to_gif", cmd_images2gif))
+    app.add_handler(CommandHandler("images2gif", cmd_images2gif))
     
     app.add_handler(CommandHandler("word2pdf", cmd_word2pdf))
     app.add_handler(CommandHandler("word_to_pdf", cmd_word2pdf))
@@ -1873,6 +1994,8 @@ def main():
     # Register document and photo message handlers
     app.add_handler(MessageHandler(filters.Document.ALL, handle_document))
     app.add_handler(MessageHandler(filters.PHOTO, handle_photo))
+    app.add_handler(MessageHandler(filters.VIDEO, handle_document))
+    app.add_handler(MessageHandler(filters.ANIMATION, handle_document))
     
     # Register text inputs for layout text setups and split ranges
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
