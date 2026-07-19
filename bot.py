@@ -842,6 +842,35 @@ async def upscale_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         logger.error(f"Upscaler error: {e}", exc_info=True)
         await status_msg.edit_text(f"❌ Error during upscaling: {str(e)}")
 
+async def gtts_fallback(update, context, text, status_msg):
+    try:
+        await status_msg.edit_text("⏳ Synthesizing voice note using Free Google TTS Engine...")
+        from gtts import gTTS
+        import asyncio
+        loop = asyncio.get_running_loop()
+        temp_dir = tempfile.mkdtemp()
+        out_path = os.path.join(temp_dir, "voice_note.mp3")
+        
+        def synthesize():
+            tts = gTTS(text=text, lang="en")
+            tts.save(out_path)
+            
+        await loop.run_in_executor(None, synthesize)
+        
+        await status_msg.edit_text("📤 Sending voice note to Telegram...")
+        with open(out_path, "rb") as f_send:
+            await context.bot.send_voice(
+                update.effective_chat.id,
+                f_send,
+                caption=f"🗣️ **Voice note generated for**: \"_{text[:60]}..._\"",
+                parse_mode="Markdown"
+            )
+        await status_msg.delete()
+        shutil.rmtree(temp_dir, ignore_errors=True)
+    except Exception as e:
+        logger.error(f"gTTS fallback error: {e}")
+        await status_msg.edit_text(f"❌ Error generating voice note: {str(e)}")
+
 async def tts_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.effective_chat.id
     message = update.message
@@ -862,10 +891,10 @@ async def tts_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     load_dotenv(os.path.join(os.path.dirname(__file__), ".env"), override=True)
     token = os.getenv("REPLICATE_API_TOKEN", "").strip()
     if not token:
-        await message.reply_text("⚠️ Replicate API Token is not configured in `.env`!")
+        await gtts_fallback(update, context, args_str, await message.reply_text("⏳ Initializing TTS..."))
         return
         
-    status_msg = await message.reply_text("⏳ Synthesizing voice note using Suno Bark AI...")
+    status_msg = await message.reply_text("⏳ Synthesizing voice note...")
     try:
         import httpx
         import asyncio
@@ -887,8 +916,8 @@ async def tts_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         async with httpx.AsyncClient(timeout=60.0) as client:
             res = await client.post(req_url, json=payload, headers=headers)
             if res.status_code != 201:
-                error_detail = res.json().get("detail", res.text)
-                await status_msg.edit_text(f"❌ Replicate API Error: {error_detail}")
+                logger.warning(f"Replicate API status {res.status_code}, switching to gTTS fallback")
+                await gtts_fallback(update, context, args_str, status_msg)
                 return
                 
             prediction = res.json()
@@ -944,16 +973,16 @@ async def tts_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
                     shutil.rmtree(temp_dir, ignore_errors=True)
                     return
                 elif status == "failed":
-                    await status_msg.edit_text(f"❌ Voice synthesis failed: {prediction.get('error', 'unknown error')}")
+                    await gtts_fallback(update, context, args_str, status_msg)
                     return
                 elif status == "canceled":
-                    await status_msg.edit_text("❌ Voice synthesis was canceled.")
+                    await gtts_fallback(update, context, args_str, status_msg)
                     return
                     
-            await status_msg.edit_text("⏱️ Voice synthesis timed out on Replicate.")
+            await gtts_fallback(update, context, args_str, status_msg)
     except Exception as e:
-        logger.error(f"TTS error: {e}", exc_info=True)
-        await status_msg.edit_text(f"❌ Error generating voice: {str(e)}")
+        logger.error(f"TTS error: {e}, switching to gTTS fallback", exc_info=True)
+        await gtts_fallback(update, context, args_str, status_msg)
 
 async def music_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.effective_chat.id
@@ -2289,15 +2318,44 @@ async def execute_avatar_stylize(query_or_msg, session, chat_id, user_id, contex
         await notify(f"❌ Error: {str(e)}")
         clear_session(chat_id, user_id)
 
+async def pollinations_image_fallback(chat_id, prompt, update_msg, context):
+    try:
+        await update_msg.edit_text("⏳ Generating image using Free Unlimited AI Engine (Pollinations.ai)...")
+        import httpx
+        import urllib.parse
+        encoded_prompt = urllib.parse.quote(prompt)
+        url = f"https://image.pollinations.ai/prompt/{encoded_prompt}"
+        
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            res = await client.get(url)
+            if res.status_code == 200:
+                temp_dir = tempfile.mkdtemp()
+                out_path = os.path.join(temp_dir, "generated_image.jpg")
+                with open(out_path, "wb") as f:
+                    f.write(res.content)
+                    
+                await update_msg.edit_text("📤 Uploading generated image to Telegram...")
+                with open(out_path, "rb") as f_send:
+                    await context.bot.send_photo(
+                        chat_id,
+                        f_send,
+                        caption=f"🎨 **Generated Image**: *{prompt}*\n✨ Powered by Free Unlimited AI Engine.",
+                        parse_mode="Markdown"
+                    )
+                await update_msg.delete()
+                shutil.rmtree(temp_dir, ignore_errors=True)
+                return
+            else:
+                await update_msg.edit_text(f"❌ Error generating image: HTTP status {res.status_code}")
+    except Exception as e:
+        logger.error(f"Pollinations fallback error: {e}")
+        await update_msg.edit_text(f"❌ Error generating image: {str(e)}")
+
 async def generate_image_with_replicate(chat_id, prompt, update_msg, context):
     load_dotenv(os.path.join(os.path.dirname(__file__), ".env"), override=True)
     token = os.getenv("REPLICATE_API_TOKEN", "").strip()
     if not token:
-        await update_msg.edit_text(
-            "⚠️ **Replicate API Token is not configured!**\n\n"
-            "Please obtain an API token from [Replicate](https://replicate.com) and add it to your `.env` file:\n"
-            "`REPLICATE_API_TOKEN=r8_your_token_here`"
-        )
+        await pollinations_image_fallback(chat_id, prompt, update_msg, context)
         return
 
     await update_msg.edit_text(f"⏳ Generating image using `{CURRENT_IMAGE_MODEL}`...")
@@ -2326,8 +2384,8 @@ async def generate_image_with_replicate(chat_id, prompt, update_msg, context):
                 headers=headers
             )
             if res.status_code != 201:
-                error_detail = res.json().get("detail", res.text)
-                await update_msg.edit_text(f"❌ Replicate API Error: {error_detail}")
+                logger.warning(f"Replicate API status {res.status_code}, switching to Pollinations.ai fallback")
+                await pollinations_image_fallback(chat_id, prompt, update_msg, context)
                 return
                 
             prediction = res.json()
@@ -2347,14 +2405,14 @@ async def generate_image_with_replicate(chat_id, prompt, update_msg, context):
                 if status == "succeeded":
                     output_urls = prediction.get("output")
                     if not output_urls:
-                        await update_msg.edit_text("❌ No output image received from Replicate.")
+                        await pollinations_image_fallback(chat_id, prompt, update_msg, context)
                         return
                     
                     output_url = output_urls[0] if isinstance(output_urls, list) else output_urls
                     await update_msg.edit_text("📤 Downloading generated image...")
                     img_res = await client.get(output_url)
                     if img_res.status_code != 200:
-                        await update_msg.edit_text("❌ Error downloading generated image.")
+                        await pollinations_image_fallback(chat_id, prompt, update_msg, context)
                         return
                         
                     out_filename = f"generated_{name}_{hash(prompt) % 10000}.png"
@@ -2373,17 +2431,17 @@ async def generate_image_with_replicate(chat_id, prompt, update_msg, context):
                     await update_msg.delete()
                     return
                 elif status == "failed":
-                    await update_msg.edit_text(f"❌ Image generation failed: {prediction.get('error', 'unknown error')}")
+                    await pollinations_image_fallback(chat_id, prompt, update_msg, context)
                     return
                 elif status == "canceled":
-                    await update_msg.edit_text("❌ Image generation was canceled.")
+                    await pollinations_image_fallback(chat_id, prompt, update_msg, context)
                     return
             
-            await update_msg.edit_text("⏱️ Image generation timed out on Replicate.")
+            await pollinations_image_fallback(chat_id, prompt, update_msg, context)
             
     except Exception as e:
-        logger.error(f"Replicate API connection error: {e}", exc_info=True)
-        await update_msg.edit_text(f"❌ Error communicating with Replicate: {str(e)}")
+        logger.error(f"Replicate error: {e}, falling back to Pollinations.ai", exc_info=True)
+        await pollinations_image_fallback(chat_id, prompt, update_msg, context)
 
 # --- File Message Handling ---
 

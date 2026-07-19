@@ -13,3 +13,4 @@ yt-dlp>=2024.3.10
 imageio>=2.30.0
 imageio-ffmpeg>=0.4.8
 matplotlib>=3.7.0
+gTTS>=2.3.0
