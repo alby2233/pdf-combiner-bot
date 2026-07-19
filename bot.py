@@ -36,6 +36,7 @@ load_dotenv()
 BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 PROXY_URL = os.getenv("PROXY_URL")
+GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
 
 if GEMINI_API_KEY:
     genai.configure(api_key=GEMINI_API_KEY)
@@ -832,7 +833,7 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_chat_action("typing")
             try:
                 import asyncio
-                model = genai.GenerativeModel("gemini-flash-latest")
+                model = genai.GenerativeModel(GEMINI_MODEL)
                 # Run the blocking Gemini API call in a thread pool executor to keep event loop responsive
                 loop = asyncio.get_running_loop()
                 response = await loop.run_in_executor(
