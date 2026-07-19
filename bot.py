@@ -13,6 +13,8 @@ from telegram.ext import (
 )
 from dotenv import load_dotenv
 import google.generativeai as genai
+from openai import OpenAI
+from anthropic import Anthropic
 
 # Import our utility functions
 from pdf_utils import (
@@ -34,9 +36,29 @@ logger = logging.getLogger(__name__)
 load_dotenv()
 BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
+CLAUDE_API_KEY = os.getenv("CLAUDE_API_KEY")
+OPENAI_BASE_URL = os.getenv("OPENAI_BASE_URL")
 
 if GEMINI_API_KEY:
     genai.configure(api_key=GEMINI_API_KEY)
+
+# Track user chosen AI provider (gemini, openai, claude)
+USER_AI_PROVIDERS = {}
+
+def get_user_ai_provider(chat_id, user_id):
+    key = (chat_id, user_id)
+    if key not in USER_AI_PROVIDERS:
+        # Default resolution based on configured API keys
+        if GEMINI_API_KEY:
+            USER_AI_PROVIDERS[key] = "gemini"
+        elif OPENAI_API_KEY:
+            USER_AI_PROVIDERS[key] = "openai"
+        elif CLAUDE_API_KEY:
+            USER_AI_PROVIDERS[key] = "claude"
+        else:
+            USER_AI_PROVIDERS[key] = "gemini" # Fallback
+    return USER_AI_PROVIDERS[key]
 
 # In-memory user sessions tracking: key=(chat_id, user_id), value=dict
 USER_SESSIONS = {}
@@ -81,7 +103,23 @@ def get_main_keyboard():
             InlineKeyboardButton("🔄 Office Conversions", callback_data="menu:office"),
         ],
         [
+            InlineKeyboardButton("🤖 AI Settings", callback_data="menu:ai_settings"),
             InlineKeyboardButton("❌ Cancel Operation", callback_data="btn:cancel")
+        ]
+    ]
+    return InlineKeyboardMarkup(keyboard)
+
+def get_ai_settings_keyboard():
+    keyboard = [
+        [
+            InlineKeyboardButton("Google Gemini", callback_data="set_ai:gemini"),
+            InlineKeyboardButton("OpenAI ChatGPT", callback_data="set_ai:openai"),
+        ],
+        [
+            InlineKeyboardButton("Anthropic Claude", callback_data="set_ai:claude"),
+        ],
+        [
+            InlineKeyboardButton("« Back to Main Menu", callback_data="menu:main")
         ]
     ]
     return InlineKeyboardMarkup(keyboard)
@@ -181,11 +219,37 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await query.edit_message_text("📂 **PDF Utilities**:\nSelect an operation:", reply_markup=get_pdf_keyboard(), parse_mode="Markdown")
         elif menu_name == "office":
             await query.edit_message_text("🔄 **Office Conversions**:\nSelect an operation:", reply_markup=get_office_keyboard(), parse_mode="Markdown")
+        elif menu_name == "ai_settings":
+            current_provider = get_user_ai_provider(chat_id, user_id)
+            status_gemini = "✅ Configured" if GEMINI_API_KEY else "❌ Not Configured"
+            status_openai = "✅ Configured" if OPENAI_API_KEY else "❌ Not Configured"
+            status_claude = "✅ Configured" if CLAUDE_API_KEY else "❌ Not Configured"
+            
+            prompt = (
+                "🤖 **AI Provider Configuration**\n\n"
+                "Select your preferred AI assistant to clear your doubts:\n\n"
+                f"• **Google Gemini**: {status_gemini}\n"
+                f"• **OpenAI ChatGPT**: {status_openai}\n"
+                f"• **Anthropic Claude**: {status_claude}\n\n"
+                f"Current Preferred Provider: **{current_provider.upper()}**\n\n"
+                "Choose one of the models below:"
+            )
+            await query.edit_message_text(prompt, reply_markup=get_ai_settings_keyboard(), parse_mode="Markdown")
             
     # 2. Cancel Button
     elif data == "btn:cancel":
         clear_session(chat_id, user_id)
         await query.edit_message_text("❌ Operation cancelled. Use /start to open the menu again.")
+        
+    # 2.5 Set AI Provider
+    elif data.startswith("set_ai:"):
+        provider = data.split(":")[1]
+        USER_AI_PROVIDERS[(chat_id, user_id)] = provider
+        await query.edit_message_text(
+            f"✅ Preferred AI assistant has been set to: **{provider.upper()}**!\n\n"
+            "Use `/start` to open the main menu again.",
+            parse_mode="Markdown"
+        )
         
     # 3. Action Buttons
     elif data.startswith("action:"):
@@ -498,32 +562,67 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 should_respond_ai = True
                 
         if should_respond_ai:
-            if not GEMINI_API_KEY:
+            provider = get_user_ai_provider(chat_id, user_id)
+            
+            # Check configuration for chosen provider
+            key_configured = False
+            if provider == "gemini" and GEMINI_API_KEY:
+                key_configured = True
+            elif provider == "openai" and OPENAI_API_KEY:
+                key_configured = True
+            elif provider == "claude" and CLAUDE_API_KEY:
+                key_configured = True
+                
+            if not key_configured:
+                missing_info = {
+                    "gemini": ("Google Gemini", "GEMINI_API_KEY"),
+                    "openai": ("OpenAI ChatGPT", "OPENAI_API_KEY"),
+                    "claude": ("Anthropic Claude", "CLAUDE_API_KEY")
+                }
+                name, key_name = missing_info.get(provider, ("Chosen AI", "API_KEY"))
                 await update.message.reply_text(
-                    "⚠️ Gemini AI features are not configured on this bot.\n\n"
-                    "Please get a Gemini API key and add it to your `.env` file:\n"
-                    "`GEMINI_API_KEY=your_gemini_key` to activate this feature."
+                    f"⚠️ **{name}** is not configured on this bot.\n\n"
+                    f"Please add `{key_name}` to your `.env` file, or select a different AI provider in the bot's dashboard under **AI Settings**."
                 )
                 return
                 
             if not prompt:
                 await update.message.reply_text(
-                    "👋 Hello! I am equipped with Google Gemini AI. "
-                    "Ask me any question or clear your doubts directly!"
+                    f"👋 Hello! I am equipped with Google Gemini, ChatGPT, and Claude.\n\n"
+                    f"My current engine is **{provider.upper()}**. Ask me any question or clear your doubts directly!"
                 )
                 return
                 
             await update.message.reply_chat_action("typing")
             try:
-                model = genai.GenerativeModel("gemini-1.5-flash")
-                # Run the blocking Gemini API call in a thread pool executor to keep event loop responsive
-                response = await context.application.loop.run_in_executor(
-                    None, lambda: model.generate_content(prompt)
+                def call_ai(p, q):
+                    if p == "gemini":
+                        model = genai.GenerativeModel("gemini-1.5-flash")
+                        return model.generate_content(q).text
+                    elif p == "openai":
+                        client = OpenAI(api_key=OPENAI_API_KEY, base_url=OPENAI_BASE_URL)
+                        response = client.chat.completions.create(
+                            model="gpt-4o-mini",
+                            messages=[{"role": "user", "content": q}]
+                        )
+                        return response.choices[0].message.content
+                    elif p == "claude":
+                        client = Anthropic(api_key=CLAUDE_API_KEY)
+                        response = client.messages.create(
+                            model="claude-3-5-sonnet-20241022",
+                            max_tokens=1000,
+                            messages=[{"role": "user", "content": q}]
+                        )
+                        return response.content[0].text
+                    return "Unknown provider"
+                
+                answer = await context.application.loop.run_in_executor(
+                    None, call_ai, provider, prompt
                 )
-                await update.message.reply_text(response.text, parse_mode="Markdown")
+                await update.message.reply_text(answer, parse_mode="Markdown")
             except Exception as e:
-                logger.error(f"Gemini AI error: {e}")
-                await update.message.reply_text(f"❌ Error communicating with AI: {str(e)}")
+                logger.error(f"AI API error ({provider}): {e}")
+                await update.message.reply_text(f"❌ Error communicating with {provider.upper()} AI: {str(e)}")
         return
 
     step = session["config_step"]
