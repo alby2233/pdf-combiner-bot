@@ -135,6 +135,11 @@ def get_pdf_keyboard():
         ],
         [
             InlineKeyboardButton("📉 Compress PDF", callback_data="action:pdf_compress"),
+            InlineKeyboardButton("✍️ Watermark PDF", callback_data="action:pdf_watermark"),
+        ],
+        [
+            InlineKeyboardButton("🔒 Lock PDF", callback_data="action:pdf_encrypt"),
+            InlineKeyboardButton("🔓 Unlock PDF", callback_data="action:pdf_decrypt"),
         ],
         [
             InlineKeyboardButton("« Back to Main Menu", callback_data="menu:main")
@@ -162,6 +167,7 @@ def get_office_keyboard():
         ],
         [
             InlineKeyboardButton("➕ Images ➔ PDF", callback_data="action:images2pdf"),
+            InlineKeyboardButton("📊 Excel Chart", callback_data="action:excel_chart"),
         ],
         [
             InlineKeyboardButton("« Back to Main Menu", callback_data="menu:main")
@@ -511,6 +517,97 @@ async def trivia_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         logger.error(f"Trivia error: {e}")
         await status_msg.edit_text(f"❌ Error generating trivia: {str(e)}")
 
+async def ocr_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    chat_id = update.effective_chat.id
+    user_id = update.effective_user.id
+    message = update.message
+    
+    # Check if we have a photo source
+    photo_file = None
+    if message.reply_to_message:
+        reply = message.reply_to_message
+        if reply.photo:
+            photo_file = reply.photo[-1]
+        elif reply.document and is_doc_image(reply.document):
+            photo_file = reply.document
+    elif message.photo:
+        photo_file = message.photo[-1]
+    elif message.document and is_doc_image(message.document):
+        photo_file = message.document
+        
+    if not photo_file:
+        await message.reply_text(
+            "⚠️ **OCR Text Extractor Usage**:\n\n"
+            "• Reply to any photo/image with: `/ocr`\n"
+            "• Or upload a photo/image with the caption: `/ocr`",
+            parse_mode="Markdown"
+        )
+        return
+        
+    if not GEMINI_API_KEY:
+        await message.reply_text(
+            "⚠️ Google Gemini AI features are not configured on this bot.\n\n"
+            "Please add your `GEMINI_API_KEY` to the `.env` file to enable OCR."
+        )
+        return
+        
+    status_msg = await message.reply_text("⏳ Extracting text from image via Gemini AI...")
+    try:
+        temp_dir = tempfile.mkdtemp()
+        file_name = "ocr_src.jpg"
+        local_path = os.path.join(temp_dir, file_name)
+        
+        # Download photo
+        new_file = await context.bot.get_file(photo_file.file_id)
+        await new_file.download_to_drive(local_path)
+        
+        # Extract text via Gemini multimodal interface
+        from PIL import Image
+        img = Image.open(local_path)
+        
+        model = genai.GenerativeModel(GEMINI_MODEL)
+        import asyncio
+        loop = asyncio.get_running_loop()
+        
+        # Run blocking API call in executor
+        response = await loop.run_in_executor(
+            None, 
+            lambda: model.generate_content([
+                "Please extract all readable text from this image. Keep the original formatting as much as possible. Output only the extracted text.", 
+                img
+            ])
+        )
+        
+        extracted_text = response.text.strip()
+        if not extracted_text:
+            await status_msg.edit_text("ℹ️ Gemini AI could not identify any readable text in this image.")
+        else:
+            # If text is too long (Telegram limit is 4096), send it as a file, otherwise as a message
+            if len(extracted_text) > 3500:
+                txt_file_path = os.path.join(temp_dir, "extracted_text.txt")
+                with open(txt_file_path, "w", encoding="utf-8") as f:
+                    f.write(extracted_text)
+                await status_msg.edit_text("📤 Extracted text is quite long, sending as a text file...")
+                with open(txt_file_path, "rb") as f:
+                    await context.bot.send_document(chat_id, f, filename="extracted_text.txt", caption="📄 Extracted Text")
+            else:
+                await status_msg.edit_text(
+                    f"📝 **Extracted Text**:\n\n```\n{extracted_text}\n```",
+                    parse_mode="Markdown"
+                )
+                
+        # Clean up files
+        try:
+            img.close()
+            os.remove(local_path)
+            os.rmdir(temp_dir)
+        except Exception:
+            pass
+            
+    except Exception as e:
+        logger.error(f"OCR execution error: {e}")
+        await status_msg.edit_text(f"❌ Error during OCR extraction: {str(e)}")
+
 async def start_action_command(update: Update, context: ContextTypes.DEFAULT_TYPE, action: str):
     chat_id = update.effective_chat.id
     user_id = update.effective_user.id
@@ -543,6 +640,10 @@ async def start_action_command(update: Update, context: ContextTypes.DEFAULT_TYP
         "img_grayscale": "🎨 **Grayscale Filter**\nPlease upload the photo you want to apply grayscale to (JPG or PNG).",
         "video2gif": "🎞️ **Video to GIF**\nPlease upload the video file you want to convert to an animated GIF.",
         "images2gif": "🖼️ **Images to GIF**\nPlease upload **multiple images** (JPG/PNG). Once you have uploaded all frames, click the **Generate GIF** button below.",
+        "pdf_encrypt": "🔒 **Lock PDF (Password Protect)**\nPlease upload the PDF document you want to lock with a password.",
+        "pdf_decrypt": "🔓 **Unlock PDF (Remove Password)**\nPlease upload the locked PDF document.",
+        "pdf_watermark": "✍️ **Watermark PDF**\nPlease upload the PDF document you want to add a watermark to.",
+        "excel_chart": "📊 **Excel/CSV Chart Generator**\nPlease upload the Excel sheet (`.xlsx`, `.xls`) or CSV file to plot.",
     }
     
     prompt = prompt_texts.get(action, "Please upload your document.")
@@ -629,6 +730,10 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "img_grayscale": "🎨 **Grayscale Filter**\nPlease upload the photo you want to apply grayscale to (JPG or PNG).",
             "video2gif": "🎞️ **Video to GIF**\nPlease upload the video file you want to convert to an animated GIF.",
             "images2gif": "🖼️ **Images to GIF**\nPlease upload **multiple images** (JPG/PNG). Once you have uploaded all frames, click the **Generate GIF** button below.",
+            "pdf_encrypt": "🔒 **Lock PDF (Password Protect)**\nPlease upload the PDF document you want to lock with a password.",
+            "pdf_decrypt": "🔓 **Unlock PDF (Remove Password)**\nPlease upload the locked PDF document.",
+            "pdf_watermark": "✍️ **Watermark PDF**\nPlease upload the PDF document you want to add a watermark to.",
+            "excel_chart": "📊 **Excel/CSV Chart Generator**\nPlease upload the Excel sheet (`.xlsx`, `.xls`) or CSV file to plot.",
         }
         
         prompt = prompt_texts.get(action, "Please upload your document.")
@@ -678,6 +783,12 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if len(session["files"]) < 2:
             await context.bot.send_message(chat_id, "⚠️ Please upload at least 2 images to generate a GIF!")
             return
+        await execute_operation(query, session, chat_id, user_id, context)
+        
+    elif data.startswith("chart_type:"):
+        chart_type = data.split(":")[1]
+        session = get_session(chat_id, user_id)
+        session["chart_type"] = chart_type
         await execute_operation(query, session, chat_id, user_id, context)
         
     # 5. Layout Setup Callbacks
@@ -1358,13 +1469,76 @@ async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE):
             parse_mode="Markdown"
         )
         
-    elif action in ["pdf2word", "pdf2ppt", "pdf2excel", "pdf2images", "layout_settings", "split", "rotate", "pdf_compress"]:
+    elif action == "excel_chart":
+        if file_ext not in [".xlsx", ".xls", ".csv"]:
+            await update.message.reply_text("⚠️ Invalid file type! Please upload an Excel (.xlsx, .xls) or CSV file.")
+            session["files"].pop()
+            return
+            
+        try:
+            from chart_utils import parse_spreadsheet, get_numeric_and_text_cols
+            headers, rows = parse_spreadsheet(local_path)
+            num_cols, txt_cols = get_numeric_and_text_cols(headers, rows)
+            
+            if not headers:
+                raise ValueError("No headers found.")
+                
+            x_guess = txt_cols[0] if txt_cols else headers[0]
+            y_guess = None
+            if num_cols:
+                y_guess = num_cols[0]
+            else:
+                for h in headers:
+                    if h != x_guess:
+                        y_guess = h
+                        break
+                if not y_guess:
+                    y_guess = headers[0]
+                    
+            session["chart_x"] = x_guess
+            session["chart_y"] = y_guess
+            
+            keyboard = InlineKeyboardMarkup([
+                [
+                    InlineKeyboardButton("📊 Bar Chart", callback_data="chart_type:bar"),
+                    InlineKeyboardButton("📈 Line Chart", callback_data="chart_type:line"),
+                ],
+                [
+                    InlineKeyboardButton("🍕 Pie Chart", callback_data="chart_type:pie"),
+                    InlineKeyboardButton("❌ Cancel", callback_data="btn:cancel"),
+                ]
+            ])
+            await update.message.reply_text(
+                "📊 **Chart Generator**\n\n"
+                f"📁 File: `{os.path.basename(local_path)}`\n"
+                f"• **X-Axis (labels)**: `{x_guess}`\n"
+                f"• **Y-Axis (values)**: `{y_guess}`\n\n"
+                "Please choose the chart type to generate:",
+                reply_markup=keyboard,
+                parse_mode="Markdown"
+            )
+        except Exception as e:
+            logger.error(f"Excel parsing error: {e}")
+            await update.message.reply_text(f"❌ Error reading spreadsheet data: {e}")
+            session["files"].pop()
+            return
+        
+    elif action in ["pdf2word", "pdf2ppt", "pdf2excel", "pdf2images", "layout_settings", "split", "rotate", "pdf_compress", "pdf_encrypt", "pdf_decrypt", "pdf_watermark"]:
         if file_ext != ".pdf":
             await update.message.reply_text("⚠️ Invalid file type! Please upload a PDF file.")
             session["files"].pop()
             return
             
-        if action == "layout_settings":
+        if action == "pdf_encrypt":
+            session["step"] = "waiting_for_encrypt_password"
+            await update.message.reply_text("🔑 **Please enter the password** to lock/encrypt this PDF:")
+        elif action == "pdf_decrypt":
+            session["step"] = "waiting_for_decrypt_password"
+            await update.message.reply_text("🔓 **Please enter the password** to unlock/decrypt this PDF:")
+        elif action == "pdf_watermark":
+            session["step"] = "waiting_for_watermark_text"
+            await update.message.reply_text("✍️ **Please enter the text** for the diagonal watermark (e.g. `CONFIDENTIAL`, `DO NOT COPY`):")
+        elif action == "layout_settings":
             prompt_msg = await update.message.reply_text("⏳ Processing PDF file...")
             await start_layout_config_flow(prompt_msg, session)
         elif action == "pdf_compress":
@@ -1607,6 +1781,24 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await execute_operation(update.message, session, chat_id, user_id, context)
         return
 
+    if session["step"] == "waiting_for_encrypt_password" and action == "pdf_encrypt":
+        session["encrypt_password"] = text
+        await update.message.reply_text("⏳ Locking PDF with password...")
+        await execute_operation(update.message, session, chat_id, user_id, context)
+        return
+
+    if session["step"] == "waiting_for_decrypt_password" and action == "pdf_decrypt":
+        session["decrypt_password"] = text
+        await update.message.reply_text("⏳ Unlocking PDF...")
+        await execute_operation(update.message, session, chat_id, user_id, context)
+        return
+
+    if session["step"] == "waiting_for_watermark_text" and action == "pdf_watermark":
+        session["watermark_text"] = text
+        await update.message.reply_text(f"⏳ Overlaying watermark `{text}`...", parse_mode="Markdown")
+        await execute_operation(update.message, session, chat_id, user_id, context)
+        return
+
     # 1.5 Check if waiting for Custom Image Width
     if step == "ask_img_custom_width" and action == "img_resize":
         try:
@@ -1761,6 +1953,62 @@ async def execute_operation(msg_or_query, session, chat_id, user_id, context):
             from compress_utils import compress_pdf
             compress_pdf(input_file, output_path, level=level)
             
+        elif action == "pdf_encrypt":
+            input_file = files[0]
+            password = session.get("encrypt_password")
+            output_filename = "locked_" + os.path.basename(input_file)
+            output_path = os.path.join(temp_dir, output_filename)
+            await notify("⏳ Locking PDF with password...")
+            from security_utils import encrypt_pdf
+            encrypt_pdf(input_file, output_path, password)
+            
+        elif action == "pdf_decrypt":
+            input_file = files[0]
+            password = session.get("decrypt_password")
+            output_filename = "unlocked_" + os.path.basename(input_file)
+            output_path = os.path.join(temp_dir, output_filename)
+            await notify("⏳ Decrypting PDF...")
+            from security_utils import decrypt_pdf
+            try:
+                decrypt_pdf(input_file, output_path, password)
+            except Exception as err:
+                await notify(f"❌ Decryption failed: {err}")
+                clear_session(chat_id, user_id)
+                return
+                
+        elif action == "pdf_watermark":
+            input_file = files[0]
+            watermark_text = session.get("watermark_text")
+            output_filename = "watermarked_" + os.path.basename(input_file)
+            output_path = os.path.join(temp_dir, output_filename)
+            await notify("⏳ Adding watermark to PDF...")
+            from watermark_utils import add_pdf_watermark
+            add_pdf_watermark(input_file, output_path, watermark_text)
+            
+        elif action == "excel_chart":
+            input_file = files[0]
+            chart_type = session.get("chart_type", "bar")
+            x_col = session.get("chart_x")
+            y_col = session.get("chart_y")
+            output_filename = "chart.png"
+            output_path = os.path.join(temp_dir, output_filename)
+            await notify("⏳ Plotting chart from spreadsheet...")
+            from chart_utils import generate_chart
+            import asyncio
+            loop = asyncio.get_running_loop()
+            try:
+                await loop.run_in_executor(None, lambda: generate_chart(input_file, chart_type, output_path, x_col, y_col))
+            except Exception as err:
+                await notify(f"❌ Error generating chart: {err}")
+                clear_session(chat_id, user_id)
+                return
+                
+            await notify("📤 Sending generated chart back to you...")
+            with open(output_path, "rb") as f:
+                await context.bot.send_photo(chat_id, f, caption=f"📊 `{chart_type.upper()}` chart: {y_col} by {x_col}")
+            clear_session(chat_id, user_id)
+            return
+            
         elif action == "video2gif":
             input_file = files[0]
             output_filename = os.path.splitext(os.path.basename(input_file))[0] + ".gif"
@@ -1902,6 +2150,7 @@ async def post_init(application):
         BotCommand("trivia", "Start a group AI quiz poll game"),
         BotCommand("video_to_gif", "Convert a video clip into animated GIF"),
         BotCommand("images_to_gif", "Combine multiple images into animated GIF"),
+        BotCommand("ocr", "Extract text from textbook pages / photos"),
     ]
     await application.bot.set_my_commands(commands)
 
@@ -1923,6 +2172,7 @@ def main():
     app.add_handler(CommandHandler("dl", download_command))
     app.add_handler(CommandHandler("choose", choose_command))
     app.add_handler(CommandHandler("trivia", trivia_command))
+    app.add_handler(CommandHandler("ocr", ocr_command))
     
     # Generic action commands registration
     async def cmd_merge(u, c): await start_action_command(u, c, "merge")
@@ -1946,6 +2196,10 @@ def main():
     async def cmd_pdf_compress(u, c): await start_action_command(u, c, "pdf_compress")
     async def cmd_video2gif(u, c): await start_action_command(u, c, "video2gif")
     async def cmd_images2gif(u, c): await start_action_command(u, c, "images2gif")
+    async def cmd_pdf_encrypt(u, c): await start_action_command(u, c, "pdf_encrypt")
+    async def cmd_pdf_decrypt(u, c): await start_action_command(u, c, "pdf_decrypt")
+    async def cmd_pdf_watermark(u, c): await start_action_command(u, c, "pdf_watermark")
+    async def cmd_excel_chart(u, c): await start_action_command(u, c, "excel_chart")
 
     app.add_handler(CommandHandler("merge", cmd_merge))
     app.add_handler(CommandHandler("split", cmd_split))
@@ -1958,6 +2212,14 @@ def main():
     app.add_handler(CommandHandler("video2gif", cmd_video2gif))
     app.add_handler(CommandHandler("images_to_gif", cmd_images2gif))
     app.add_handler(CommandHandler("images2gif", cmd_images2gif))
+    app.add_handler(CommandHandler("lock_pdf", cmd_pdf_encrypt))
+    app.add_handler(CommandHandler("lock", cmd_pdf_encrypt))
+    app.add_handler(CommandHandler("unlock_pdf", cmd_pdf_decrypt))
+    app.add_handler(CommandHandler("unlock", cmd_pdf_decrypt))
+    app.add_handler(CommandHandler("watermark_pdf", cmd_pdf_watermark))
+    app.add_handler(CommandHandler("watermark", cmd_pdf_watermark))
+    app.add_handler(CommandHandler("excel_chart", cmd_excel_chart))
+    app.add_handler(CommandHandler("chart", cmd_excel_chart))
     
     app.add_handler(CommandHandler("word2pdf", cmd_word2pdf))
     app.add_handler(CommandHandler("word_to_pdf", cmd_word2pdf))
