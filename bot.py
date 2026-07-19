@@ -37,6 +37,7 @@ BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 PROXY_URL = os.getenv("PROXY_URL")
 GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
+REPLICATE_API_TOKEN = os.getenv("REPLICATE_API_TOKEN")
 
 if GEMINI_API_KEY:
     genai.configure(api_key=GEMINI_API_KEY)
@@ -606,14 +607,160 @@ async def execute_image_operation(query_or_msg, session, context):
     finally:
         clear_session(chat_id, user_id)
 
+def is_doc_image(doc):
+    if not doc or not doc.file_name:
+        return False
+    file_ext = os.path.splitext(doc.file_name)[1].lower()
+    return file_ext in [".jpg", ".jpeg", ".png"]
+
+async def start_replicate_from_photo_or_doc(update, context, file_id, file_name_hint, prompt):
+    chat_id = update.effective_chat.id
+    msg = await update.message.reply_text("⏳ Downloading image for AI editing...")
+    
+    try:
+        new_file = await context.bot.get_file(file_id)
+        temp_dir = tempfile.mkdtemp()
+        local_path = os.path.join(temp_dir, f"source_{file_name_hint}")
+        await new_file.download_to_drive(local_path)
+        
+        await edit_image_with_replicate(chat_id, local_path, prompt, msg, context)
+        shutil.rmtree(temp_dir, ignore_errors=True)
+    except Exception as e:
+        logger.error(f"start_replicate_from_photo_or_doc error: {e}", exc_info=True)
+        await msg.edit_text(f"❌ Error downloading image: {e}")
+
+async def edit_image_with_replicate(chat_id, src_path, prompt, update_msg, context):
+    if not REPLICATE_API_TOKEN:
+        await update_msg.edit_text(
+            "⚠️ **Replicate API Token is not configured!**\n\n"
+            "To use conversational image editing via prompts, please obtain a free/cheap API token from [Replicate](https://replicate.com) and add it to your `.env` file:\n"
+            "`REPLICATE_API_TOKEN=r8_your_token_here`"
+        )
+        return
+
+    await update_msg.edit_text("⏳ Preparing image for AI processing...")
+    
+    try:
+        import base64
+        import httpx
+        import asyncio
+        
+        # Convert local image to base64 Data URI
+        with open(src_path, "rb") as f:
+            encoded_data = base64.b64encode(f.read()).decode("utf-8")
+        
+        file_ext = os.path.splitext(src_path)[1].lower()
+        mime_type = "image/png" if file_ext == ".png" else "image/jpeg"
+        data_uri = f"data:{mime_type};base64,{encoded_data}"
+        
+        headers = {
+            "Authorization": f"Token {REPLICATE_API_TOKEN}",
+            "Content-Type": "application/json"
+        }
+        
+        payload = {
+            "version": "30c1d0b916a6f8efce20493f5d61ee27491ab2a60437c13c588468b9810ec23f",
+            "input": {
+                "image": data_uri,
+                "prompt": prompt,
+                "num_inference_steps": 25
+            }
+        }
+        
+        await update_msg.edit_text("🚀 Sending request to Replicate AI...")
+        
+        async with httpx.AsyncClient(timeout=60.0) as client:
+            res = await client.post(
+                "https://api.replicate.com/v1/predictions", 
+                json=payload, 
+                headers=headers
+            )
+            if res.status_code != 201:
+                error_detail = res.json().get("detail", res.text)
+                await update_msg.edit_text(f"❌ Replicate API Error: {error_detail}")
+                return
+                
+            prediction = res.json()
+            poll_url = prediction["urls"]["get"]
+            
+            await update_msg.edit_text("🎨 Editing your image... (this may take 5-15 seconds)")
+            
+            for _ in range(30):
+                await asyncio.sleep(1.5)
+                poll_res = await client.get(poll_url, headers=headers)
+                if poll_res.status_code != 200:
+                    continue
+                    
+                prediction = poll_res.json()
+                status = prediction["status"]
+                
+                if status == "succeeded":
+                    output_urls = prediction.get("output")
+                    if not output_urls or not isinstance(output_urls, list):
+                        await update_msg.edit_text("❌ No output image received from Replicate.")
+                        return
+                    
+                    output_url = output_urls[0]
+                    await update_msg.edit_text("📤 Downloading edited image...")
+                    img_res = await client.get(output_url)
+                    if img_res.status_code != 200:
+                        await update_msg.edit_text("❌ Error downloading final image from Replicate.")
+                        return
+                        
+                    out_filename = f"edited_{os.path.basename(src_path)}"
+                    out_path = os.path.join(tempfile.gettempdir(), out_filename)
+                    with open(out_path, "wb") as f_out:
+                        f_out.write(img_res.content)
+                        
+                    await update_msg.edit_text("📤 Sending finished image to Telegram...")
+                    with open(out_path, "rb") as f_send:
+                        await context.bot.send_document(
+                            chat_id, 
+                            f_send, 
+                            filename=out_filename, 
+                            caption=f"✅ Image edited via prompt: *{prompt}*",
+                            parse_mode="Markdown"
+                        )
+                    await update_msg.delete()
+                    return
+                elif status == "failed":
+                    await update_msg.edit_text(f"❌ Image editing failed: {prediction.get('error', 'unknown error')}")
+                    return
+                elif status == "canceled":
+                    await update_msg.edit_text("❌ Image editing was canceled.")
+                    return
+            
+            await update_msg.edit_text("⏱️ Image editing timed out on Replicate.")
+            
+    except Exception as e:
+        logger.error(f"Replicate API connection error: {e}", exc_info=True)
+        await update_msg.edit_text(f"❌ Error communicating with Replicate: {str(e)}")
+
 # --- File Message Handling ---
 
 async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.effective_chat.id
     user_id = update.effective_user.id
     is_group = update.effective_chat.type in ["group", "supergroup"]
-    logger.info(f"handle_document: chat_id={chat_id}, user_id={user_id}, file_name='{update.message.document.file_name if update.message.document else None}'")
+    doc = update.message.document
+    caption = update.message.caption or ""
     
+    # Check if document is an image and user has a caption command for Replicate
+    if doc and is_doc_image(doc):
+        bot_username = context.bot.username
+        bot_mention = f"@{bot_username}"
+        is_mentioned = bot_mention.lower() in caption.lower()
+        
+        if is_group and is_mentioned:
+            prompt = caption.lower().replace(bot_mention.lower(), "").strip()
+            if prompt:
+                await start_replicate_from_photo_or_doc(update, context, doc.file_id, doc.file_name, prompt)
+                return
+        elif not is_group and caption:
+            if not session or not session["action"]:
+                await start_replicate_from_photo_or_doc(update, context, doc.file_id, doc.file_name, caption)
+                return
+                
     session = USER_SESSIONS.get((chat_id, user_id))
     
     # 1. Group checks: ignore if no active session initialized via menu/command
@@ -727,6 +874,24 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     is_group = update.effective_chat.type in ["group", "supergroup"]
     logger.info(f"handle_photo: chat_id={chat_id}, user_id={user_id}")
     
+    caption = update.message.caption or ""
+    bot_username = context.bot.username
+    bot_mention = f"@{bot_username}"
+    is_mentioned = bot_mention.lower() in caption.lower()
+    
+    if is_group and is_mentioned:
+        prompt = caption.lower().replace(bot_mention.lower(), "").strip()
+        if prompt:
+            photo = update.message.photo[-1]
+            await start_replicate_from_photo_or_doc(update, context, photo.file_id, "photo.jpg", prompt)
+            return
+    elif not is_group and caption:
+        session = USER_SESSIONS.get((chat_id, user_id))
+        if not session or not session["action"]:
+            photo = update.message.photo[-1]
+            await start_replicate_from_photo_or_doc(update, context, photo.file_id, "photo.jpg", caption)
+            return
+            
     session = USER_SESSIONS.get((chat_id, user_id))
     
     if not session or not session["action"]:
@@ -795,6 +960,32 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
         is_group = update.effective_chat.type in ["group", "supergroup"]
         bot_username = (await context.bot.get_me()).username
         bot_mention = f"@{bot_username}"
+        
+        # Check if they replied to a photo or document image!
+        replied_msg = update.message.reply_to_message
+        if replied_msg and (replied_msg.photo or replied_msg.document):
+            is_mentioned = bot_mention.lower() in text.lower()
+            should_edit = False
+            prompt = text
+            if not is_group:
+                should_edit = True
+            else:
+                if is_mentioned:
+                    should_edit = True
+                    prompt = text.lower().replace(bot_mention.lower(), "").strip()
+            
+            if should_edit and prompt:
+                target_photo_id = None
+                file_name_hint = "photo.jpg"
+                if replied_msg.photo:
+                    target_photo_id = replied_msg.photo[-1].file_id
+                elif replied_msg.document and is_doc_image(replied_msg.document):
+                    target_photo_id = replied_msg.document.file_id
+                    file_name_hint = replied_msg.document.file_name
+                
+                if target_photo_id:
+                    await start_replicate_from_photo_or_doc(update, context, target_photo_id, file_name_hint, prompt)
+                    return
         
         is_mentioned = bot_mention in text
         is_reply_to_bot = (
