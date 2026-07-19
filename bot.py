@@ -720,7 +720,9 @@ async def start_replicate_from_photo_or_doc(update, context, file_id, file_name_
         await msg.edit_text(f"❌ Error downloading image: {e}")
 
 async def edit_image_with_replicate(chat_id, src_path, prompt, update_msg, context):
-    if not REPLICATE_API_TOKEN:
+    load_dotenv(override=True)
+    token = os.getenv("REPLICATE_API_TOKEN", "").strip()
+    if not token:
         await update_msg.edit_text(
             "⚠️ **Replicate API Token is not configured!**\n\n"
             "To use conversational image editing via prompts, please obtain a free/cheap API token from [Replicate](https://replicate.com) and add it to your `.env` file:\n"
@@ -744,7 +746,7 @@ async def edit_image_with_replicate(chat_id, src_path, prompt, update_msg, conte
         data_uri = f"data:{mime_type};base64,{encoded_data}"
         
         headers = {
-            "Authorization": f"Token {REPLICATE_API_TOKEN}",
+            "Authorization": f"Bearer {token}",
             "Content-Type": "application/json"
         }
         
@@ -838,7 +840,9 @@ async def edit_image_with_replicate(chat_id, src_path, prompt, update_msg, conte
         await update_msg.edit_text(f"❌ Error communicating with Replicate: {str(e)}")
 
 async def generate_image_with_replicate(chat_id, prompt, update_msg, context):
-    if not REPLICATE_API_TOKEN:
+    load_dotenv(override=True)
+    token = os.getenv("REPLICATE_API_TOKEN", "").strip()
+    if not token:
         await update_msg.edit_text(
             "⚠️ **Replicate API Token is not configured!**\n\n"
             "Please obtain an API token from [Replicate](https://replicate.com) and add it to your `.env` file:\n"
@@ -853,7 +857,7 @@ async def generate_image_with_replicate(chat_id, prompt, update_msg, context):
         import asyncio
         
         headers = {
-            "Authorization": f"Token {REPLICATE_API_TOKEN}",
+            "Authorization": f"Bearer {token}",
             "Content-Type": "application/json"
         }
         
