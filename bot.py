@@ -274,10 +274,12 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "• `/set_model` - Select active generation/editing model dynamically\n"
         "• **Prompt Editing**: Reply to any photo (or upload with caption) and mention the bot with an edit instruction (e.g. `@pptpdf_bot blur background`)\n"
         "• `/avatar` - Stylize portrait face into Claymation, Pixel Art, 3D, etc.\n"
+        "• `/upscale` - Upscale and enhance low-res photo to high-res 4K\n"
         "• `/meme Top Text | Bottom Text` - Overlay text on image to make a meme\n\n"
         "🎲 **Group Games & Social Tools**:\n"
         "• `/download <link>` - Download videos from YouTube, TikTok, Reels, etc.\n"
         "• `/music <prompt>` - Generate 10s custom AI lofi/music beats from text\n"
+        "• `/tts <text>` - Convert text to voice note/speech using Suno Bark\n"
         "• `/choose <options>` - Randomly pick an option from a list\n"
         "• `/trivia` - Start a Gemini AI-powered quiz poll in the group\n\n"
         "🤖 **Google Gemini AI**:\n"
@@ -627,6 +629,249 @@ async def ocr_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except Exception as e:
         logger.error(f"OCR execution error: {e}")
         await status_msg.edit_text(f"❌ Error during OCR extraction: {str(e)}")
+
+async def upscale_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    chat_id = update.effective_chat.id
+    message = update.message
+    
+    photo_file = None
+    if message.reply_to_message:
+        reply = message.reply_to_message
+        if reply.photo:
+            photo_file = reply.photo[-1]
+        elif reply.document and is_doc_image(reply.document):
+            photo_file = reply.document
+    elif message.photo:
+        photo_file = message.photo[-1]
+    elif message.document and is_doc_image(message.document):
+        photo_file = message.document
+        
+    if not photo_file:
+        await message.reply_text(
+            "⚠️ **AI Image Upscaler Usage**:\n\n"
+            "• Reply to any photo with: `/upscale`\n"
+            "• Or upload a photo with the caption: `/upscale`",
+            parse_mode="Markdown"
+        )
+        return
+        
+    load_dotenv(os.path.join(os.path.dirname(__file__), ".env"), override=True)
+    token = os.getenv("REPLICATE_API_TOKEN", "").strip()
+    if not token:
+        await message.reply_text("⚠️ Replicate API Token is not configured in `.env`!")
+        return
+        
+    status_msg = await message.reply_text("⏳ Downloading source image for upscaling...")
+    try:
+        import base64
+        import httpx
+        import asyncio
+        
+        new_file = await context.bot.get_file(photo_file.file_id)
+        temp_dir = tempfile.mkdtemp()
+        local_path = os.path.join(temp_dir, "upscale_src.jpg")
+        await new_file.download_to_drive(local_path)
+        
+        with open(local_path, "rb") as f:
+            encoded_data = base64.b64encode(f.read()).decode("utf-8")
+        data_uri = f"data:image/jpeg;base64,{encoded_data}"
+        
+        headers = {
+            "Authorization": f"Bearer {token}",
+            "Content-Type": "application/json"
+        }
+        
+        req_url = "https://api.replicate.com/v1/predictions"
+        payload = {
+            "version": "b3ef194191d13140337468c916c2c5b96dd0cb06dffc032a022a31807f6a5ea8",
+            "input": {
+                "image": data_uri,
+                "scale": 4,
+                "face_enhance": True
+            }
+        }
+        
+        await status_msg.edit_text("🚀 Running Real-ESRGAN + GFPGAN Face Enhancer (Upscaling to 4K)...")
+        
+        async with httpx.AsyncClient(timeout=60.0) as client:
+            res = await client.post(req_url, json=payload, headers=headers)
+            if res.status_code != 201:
+                error_detail = res.json().get("detail", res.text)
+                await status_msg.edit_text(f"❌ Replicate API Error: {error_detail}")
+                shutil.rmtree(temp_dir, ignore_errors=True)
+                return
+                
+            prediction = res.json()
+            poll_url = prediction["urls"]["get"]
+            
+            for _ in range(40):
+                await asyncio.sleep(2.0)
+                poll_res = await client.get(poll_url, headers=headers)
+                if poll_res.status_code != 200:
+                    continue
+                    
+                prediction = poll_res.json()
+                status = prediction["status"]
+                
+                if status == "succeeded":
+                    output_url = prediction.get("output")
+                    if not output_url:
+                        await status_msg.edit_text("❌ No upscaled image received from Replicate.")
+                        shutil.rmtree(temp_dir, ignore_errors=True)
+                        return
+                        
+                    await status_msg.edit_text("📥 Downloading 4K upscaled image...")
+                    img_res = await client.get(output_url)
+                    if img_res.status_code != 200:
+                        await status_msg.edit_text("❌ Error downloading upscaled image.")
+                        shutil.rmtree(temp_dir, ignore_errors=True)
+                        return
+                        
+                    out_filename = "upscaled_image_4k.png"
+                    out_path = os.path.join(temp_dir, out_filename)
+                    with open(out_path, "wb") as f_out:
+                        f_out.write(img_res.content)
+                        
+                    await status_msg.edit_text("📤 Sending 4K image back to Telegram...")
+                    with open(out_path, "rb") as f_send:
+                        await context.bot.send_document(
+                            chat_id, 
+                            f_send, 
+                            filename=out_filename,
+                            caption="✅ **4K Upscaled & Enhanced Image**\nEnhanced using Real-ESRGAN and GFPGAN face reconstruction.",
+                            parse_mode="Markdown"
+                        )
+                    await status_msg.delete()
+                    shutil.rmtree(temp_dir, ignore_errors=True)
+                    return
+                elif status == "failed":
+                    await status_msg.edit_text(f"❌ Upscaling failed: {prediction.get('error', 'unknown error')}")
+                    shutil.rmtree(temp_dir, ignore_errors=True)
+                    return
+                elif status == "canceled":
+                    await status_msg.edit_text("❌ Upscaling was canceled.")
+                    shutil.rmtree(temp_dir, ignore_errors=True)
+                    return
+                    
+            await status_msg.edit_text("⏱️ Upscaling timed out on Replicate.")
+            shutil.rmtree(temp_dir, ignore_errors=True)
+            
+    except Exception as e:
+        logger.error(f"Upscaler error: {e}", exc_info=True)
+        await status_msg.edit_text(f"❌ Error during upscaling: {str(e)}")
+
+async def tts_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    chat_id = update.effective_chat.id
+    message = update.message
+    
+    args_str = " ".join(context.args) if context.args else ""
+    if not args_str and message.reply_to_message and message.reply_to_message.text:
+        args_str = message.reply_to_message.text
+        
+    if not args_str:
+        await message.reply_text(
+            "⚠️ **AI Text-to-Speech Usage**:\n\n"
+            "• `/tts Hello, welcome to our college group!`\n"
+            "• Or reply to any text message with `/tts` to speak it.",
+            parse_mode="Markdown"
+        )
+        return
+        
+    load_dotenv(os.path.join(os.path.dirname(__file__), ".env"), override=True)
+    token = os.getenv("REPLICATE_API_TOKEN", "").strip()
+    if not token:
+        await message.reply_text("⚠️ Replicate API Token is not configured in `.env`!")
+        return
+        
+    status_msg = await message.reply_text("⏳ Synthesizing voice note using Suno Bark AI...")
+    try:
+        import httpx
+        import asyncio
+        
+        headers = {
+            "Authorization": f"Bearer {token}",
+            "Content-Type": "application/json"
+        }
+        
+        req_url = "https://api.replicate.com/v1/predictions"
+        payload = {
+            "version": "b76242b40d67c76ab6742e987628a2a9ac019e11d56ab96c4e91ce03b79b2787",
+            "input": {
+                "prompt": args_str,
+                "text_temp": 0.7
+            }
+        }
+        
+        async with httpx.AsyncClient(timeout=60.0) as client:
+            res = await client.post(req_url, json=payload, headers=headers)
+            if res.status_code != 201:
+                error_detail = res.json().get("detail", res.text)
+                await status_msg.edit_text(f"❌ Replicate API Error: {error_detail}")
+                return
+                
+            prediction = res.json()
+            poll_url = prediction["urls"]["get"]
+            
+            for _ in range(40):
+                await asyncio.sleep(2.0)
+                poll_res = await client.get(poll_url, headers=headers)
+                if poll_res.status_code != 200:
+                    continue
+                    
+                prediction = poll_res.json()
+                status = prediction["status"]
+                
+                if status == "succeeded":
+                    output_url = prediction.get("output")
+                    if not output_url:
+                        await status_msg.edit_text("❌ No audio output received from Bark.")
+                        return
+                        
+                    if isinstance(output_url, dict):
+                        audio_url = output_url.get("audio")
+                    elif isinstance(output_url, list):
+                        audio_url = output_url[0]
+                    else:
+                        audio_url = output_url
+                        
+                    if not audio_url:
+                        await status_msg.edit_text("❌ No audio URL found in response.")
+                        return
+                        
+                    await status_msg.edit_text("📥 Downloading synthesized voice note...")
+                    audio_res = await client.get(audio_url)
+                    if audio_res.status_code != 200:
+                        await status_msg.edit_text("❌ Error downloading voice file.")
+                        return
+                        
+                    temp_dir = tempfile.mkdtemp()
+                    out_filename = "voice_note.wav"
+                    out_path = os.path.join(temp_dir, out_filename)
+                    with open(out_path, "wb") as f_out:
+                        f_out.write(audio_res.content)
+                        
+                    await status_msg.edit_text("📤 Sending voice note to Telegram...")
+                    with open(out_path, "rb") as f_send:
+                        await context.bot.send_voice(
+                            chat_id, 
+                            f_send, 
+                            caption=f"🗣️ **Voice note generated for**: \"_{args_str[:60]}..._\"",
+                            parse_mode="Markdown"
+                        )
+                    await status_msg.delete()
+                    shutil.rmtree(temp_dir, ignore_errors=True)
+                    return
+                elif status == "failed":
+                    await status_msg.edit_text(f"❌ Voice synthesis failed: {prediction.get('error', 'unknown error')}")
+                    return
+                elif status == "canceled":
+                    await status_msg.edit_text("❌ Voice synthesis was canceled.")
+                    return
+                    
+            await status_msg.edit_text("⏱️ Voice synthesis timed out on Replicate.")
+    except Exception as e:
+        logger.error(f"TTS error: {e}", exc_info=True)
+        await status_msg.edit_text(f"❌ Error generating voice: {str(e)}")
 
 async def music_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.effective_chat.id
@@ -2719,6 +2964,8 @@ async def post_init(application):
         BotCommand("avatar", "Stylize a face portrait into Claymation, Pixel Art, 3D, etc."),
         BotCommand("music", "Generate 10s custom AI lofi/music beats from text prompt"),
         BotCommand("seminar", "Create full Seminar PowerPoint slides & Word Report from topic"),
+        BotCommand("upscale", "Upscale low-res photo to high-res 4K image"),
+        BotCommand("tts", "Convert text to speech/voice note using Suno Bark"),
     ]
     await application.bot.set_my_commands(commands)
 
@@ -2747,6 +2994,9 @@ def main():
     app.add_handler(CommandHandler("generate_music", music_command))
     app.add_handler(CommandHandler("seminar", seminar_command))
     app.add_handler(CommandHandler("create_seminar", seminar_command))
+    app.add_handler(CommandHandler("upscale", upscale_command))
+    app.add_handler(CommandHandler("tts", tts_command))
+    app.add_handler(CommandHandler("speak", tts_command))
     
     # Generic action commands registration
     async def cmd_merge(u, c): await start_action_command(u, c, "merge")
