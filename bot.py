@@ -12,6 +12,7 @@ from telegram.ext import (
     filters,
 )
 from dotenv import load_dotenv
+import google.generativeai as genai
 
 # Import our utility functions
 from pdf_utils import (
@@ -32,6 +33,10 @@ logger = logging.getLogger(__name__)
 # Load environment variables
 load_dotenv()
 BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
+
+if GEMINI_API_KEY:
+    genai.configure(api_key=GEMINI_API_KEY)
 
 # In-memory user sessions tracking: key=(chat_id, user_id), value=dict
 USER_SESSIONS = {}
@@ -467,8 +472,59 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = update.message.text.strip()
     
     session = USER_SESSIONS.get((chat_id, user_id))
+    
+    # If no active document processing session, check for AI doubt-resolution queries
     if not session or not session["action"]:
-        return # Ignore random texts
+        is_group = update.effective_chat.type in ["group", "supergroup"]
+        bot_username = (await context.bot.get_me()).username
+        bot_mention = f"@{bot_username}"
+        
+        is_mentioned = bot_mention in text
+        is_reply_to_bot = (
+            update.message.reply_to_message 
+            and update.message.reply_to_message.from_user.id == context.bot.id
+        )
+        
+        should_respond_ai = False
+        prompt = text
+        
+        if not is_group:
+            should_respond_ai = True
+        else:
+            if is_mentioned:
+                should_respond_ai = True
+                prompt = text.replace(bot_mention, "").strip()
+            elif is_reply_to_bot:
+                should_respond_ai = True
+                
+        if should_respond_ai:
+            if not GEMINI_API_KEY:
+                await update.message.reply_text(
+                    "⚠️ Gemini AI features are not configured on this bot.\n\n"
+                    "Please get a Gemini API key and add it to your `.env` file:\n"
+                    "`GEMINI_API_KEY=your_gemini_key` to activate this feature."
+                )
+                return
+                
+            if not prompt:
+                await update.message.reply_text(
+                    "👋 Hello! I am equipped with Google Gemini AI. "
+                    "Ask me any question or clear your doubts directly!"
+                )
+                return
+                
+            await update.message.reply_chat_action("typing")
+            try:
+                model = genai.GenerativeModel("gemini-1.5-flash")
+                # Run the blocking Gemini API call in a thread pool executor to keep event loop responsive
+                response = await context.application.loop.run_in_executor(
+                    None, lambda: model.generate_content(prompt)
+                )
+                await update.message.reply_text(response.text, parse_mode="Markdown")
+            except Exception as e:
+                logger.error(f"Gemini AI error: {e}")
+                await update.message.reply_text(f"❌ Error communicating with AI: {str(e)}")
+        return
 
     step = session["config_step"]
     action = session["action"]
