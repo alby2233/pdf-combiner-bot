@@ -272,9 +272,11 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "• `/generate <prompt>` - Generate a new image from scratch\n"
         "• `/set_model` - Select active generation/editing model dynamically\n"
         "• **Prompt Editing**: Reply to any photo (or upload with caption) and mention the bot with an edit instruction (e.g. `@pptpdf_bot blur background`)\n"
+        "• `/avatar` - Stylize portrait face into Claymation, Pixel Art, 3D, etc.\n"
         "• `/meme Top Text | Bottom Text` - Overlay text on image to make a meme\n\n"
         "🎲 **Group Games & Social Tools**:\n"
         "• `/download <link>` - Download videos from YouTube, TikTok, Reels, etc.\n"
+        "• `/music <prompt>` - Generate 10s custom AI lofi/music beats from text\n"
         "• `/choose <options>` - Randomly pick an option from a list\n"
         "• `/trivia` - Start a Gemini AI-powered quiz poll in the group\n\n"
         "🤖 **Google Gemini AI**:\n"
@@ -625,6 +627,172 @@ async def ocr_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         logger.error(f"OCR execution error: {e}")
         await status_msg.edit_text(f"❌ Error during OCR extraction: {str(e)}")
 
+async def music_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    chat_id = update.effective_chat.id
+    message = update.message
+    
+    args_str = " ".join(context.args) if context.args else ""
+    if not args_str and message.caption and (message.caption.startswith("/music") or message.caption.startswith("/generate_music")):
+        caption_parts = message.caption.split()
+        if len(caption_parts) > 1:
+            args_str = message.caption.replace(caption_parts[0], "", 1).strip()
+            
+    if not args_str:
+        await message.reply_text(
+            "⚠️ **AI Music Generator Usage**:\n\n"
+            "• `/music lofi chill study beats`\n"
+            "• `/music energetic rock guitar riff`\n"
+            "• `/music ambient synth space wave`",
+            parse_mode="Markdown"
+        )
+        return
+        
+    load_dotenv(os.path.join(os.path.dirname(__file__), ".env"), override=True)
+    token = os.getenv("REPLICATE_API_TOKEN", "").strip()
+    if not token:
+        await message.reply_text(
+            "⚠️ **Replicate API Token is not configured!**\n\n"
+            "Please configure `REPLICATE_API_TOKEN` in your `.env` file to generate music."
+        )
+        return
+        
+    status_msg = await message.reply_text(f"⏳ Generating 10s of music for: `{args_str}`...")
+    try:
+        import httpx
+        import asyncio
+        
+        headers = {
+            "Authorization": f"Bearer {token}",
+            "Content-Type": "application/json"
+        }
+        
+        req_url = "https://api.replicate.com/v1/predictions"
+        payload = {
+            "version": "671ac645ce5e552cc63a54a2bbff63fcf798043055d2dac5fc9e36a837eedcfb",
+            "input": {
+                "prompt": args_str,
+                "duration": 10,
+                "model_version": "melody"
+            }
+        }
+        
+        async with httpx.AsyncClient(timeout=60.0) as client:
+            res = await client.post(req_url, json=payload, headers=headers)
+            if res.status_code != 201:
+                error_detail = res.json().get("detail", res.text)
+                await status_msg.edit_text(f"❌ Replicate API Error: {error_detail}")
+                return
+                
+            prediction = res.json()
+            poll_url = prediction["urls"]["get"]
+            
+            for _ in range(40):
+                await asyncio.sleep(2.0)
+                poll_res = await client.get(poll_url, headers=headers)
+                if poll_res.status_code != 200:
+                    continue
+                    
+                prediction = poll_res.json()
+                status = prediction["status"]
+                
+                if status == "succeeded":
+                    output_url = prediction.get("output")
+                    if not output_url:
+                        await status_msg.edit_text("❌ No music output received from Replicate.")
+                        return
+                        
+                    await status_msg.edit_text("📤 Downloading music track...")
+                    track_res = await client.get(output_url)
+                    if track_res.status_code != 200:
+                        await status_msg.edit_text("❌ Error downloading generated music file.")
+                        return
+                        
+                    temp_dir = tempfile.mkdtemp()
+                    out_filename = "music_track.wav"
+                    out_path = os.path.join(temp_dir, out_filename)
+                    with open(out_path, "wb") as f_out:
+                        f_out.write(track_res.content)
+                        
+                    await status_msg.edit_text("📤 Sending track back to Telegram...")
+                    with open(out_path, "rb") as f_send:
+                        await context.bot.send_audio(
+                            chat_id, 
+                            f_send, 
+                            title="AI Generated Music",
+                            performer="MusicGen",
+                            caption=f"🎵 **Vibe**: `{args_str}`",
+                            parse_mode="Markdown"
+                        )
+                    await status_msg.delete()
+                    shutil.rmtree(temp_dir, ignore_errors=True)
+                    return
+                elif status == "failed":
+                    await status_msg.edit_text(f"❌ Music generation failed: {prediction.get('error', 'unknown error')}")
+                    return
+                elif status == "canceled":
+                    await status_msg.edit_text("❌ Music generation was canceled.")
+                    return
+                    
+            await status_msg.edit_text("⏱️ Music generation timed out on Replicate.")
+    except Exception as e:
+        logger.error(f"Music generation error: {e}", exc_info=True)
+        await status_msg.edit_text(f"❌ Error generating music: {str(e)}")
+
+async def stylize_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    chat_id = update.effective_chat.id
+    user_id = update.effective_user.id
+    message = update.message
+    
+    # Get photo source
+    photo_file = None
+    if message.reply_to_message:
+        reply = message.reply_to_message
+        if reply.photo:
+            photo_file = reply.photo[-1]
+        elif reply.document and is_doc_image(reply.document):
+            photo_file = reply.document
+    elif message.photo:
+        photo_file = message.photo[-1]
+    elif message.document and is_doc_image(message.document):
+        photo_file = message.document
+        
+    if not photo_file:
+        await message.reply_text(
+            "⚠️ **AI Avatar Stylizer Usage**:\n\n"
+            "• Reply to any face photo with: `/avatar` or `/stylize`\n"
+            "• Or upload a face photo with the caption: `/avatar` or `/stylize`",
+            parse_mode="Markdown"
+        )
+        return
+        
+    clear_session(chat_id, user_id)
+    session = get_session(chat_id, user_id)
+    session["avatar_photo_id"] = photo_file.file_id
+    session["action"] = "avatar_stylize"
+    
+    keyboard = InlineKeyboardMarkup([
+        [
+            InlineKeyboardButton("🧱 Claymation", callback_data="style:Clay"),
+            InlineKeyboardButton("🎮 Video Game", callback_data="style:Video game"),
+        ],
+        [
+            InlineKeyboardButton("👾 Pixel Art", callback_data="style:Pixel art"),
+            InlineKeyboardButton("🧸 3D Toy", callback_data="style:Toy"),
+        ],
+        [
+            InlineKeyboardButton("😃 Emoji", callback_data="style:Emoji"),
+            InlineKeyboardButton("🎬 Pixar 3D", callback_data="style:3D"),
+        ],
+        [
+            InlineKeyboardButton("❌ Cancel", callback_data="btn:cancel")
+        ]
+    ])
+    await message.reply_text(
+        "🎭 **Select Avatar Style**\n\nPlease choose the artistic style for your stylized face avatar:",
+        reply_markup=keyboard,
+        parse_mode="Markdown"
+    )
+
 async def start_action_command(update: Update, context: ContextTypes.DEFAULT_TYPE, action: str):
     chat_id = update.effective_chat.id
     user_id = update.effective_user.id
@@ -809,6 +977,13 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         session = get_session(chat_id, user_id)
         session["chart_type"] = chart_type
         await execute_operation(query, session, chat_id, user_id, context)
+        
+    elif data.startswith("style:"):
+        selected_style = data.split(":")[1]
+        session = get_session(chat_id, user_id)
+        session["selected_style"] = selected_style
+        await query.edit_message_text(f"⏳ Generating stylized avatar in `{selected_style}` style...")
+        await execute_avatar_stylize(query, session, chat_id, user_id, context)
         
     # 5. Layout Setup Callbacks
     elif data.startswith("layout:"):
@@ -1249,6 +1424,154 @@ async def edit_image_with_replicate(chat_id, src_path, prompt, update_msg, conte
     except Exception as e:
         logger.error(f"Replicate API connection error: {e}", exc_info=True)
         await update_msg.edit_text(f"❌ Error communicating with Replicate: {str(e)}")
+
+async def execute_avatar_stylize(query_or_msg, session, chat_id, user_id, context):
+    def get_notify():
+        async def notify(text):
+            try:
+                if hasattr(query_or_msg, "edit_message_text"):
+                    await query_or_msg.edit_message_text(text)
+                else:
+                    await query_or_msg.reply_text(text)
+            except Exception:
+                pass
+        return notify
+        
+    notify = get_notify()
+    
+    photo_id = session.get("avatar_photo_id")
+    style = session.get("selected_style", "3D")
+    
+    if not photo_id:
+        await notify("❌ Error: No source portrait found.")
+        clear_session(chat_id, user_id)
+        return
+        
+    load_dotenv(os.path.join(os.path.dirname(__file__), ".env"), override=True)
+    token = os.getenv("REPLICATE_API_TOKEN", "").strip()
+    if not token:
+        await notify("⚠️ Replicate API Token is not configured!")
+        clear_session(chat_id, user_id)
+        return
+        
+    try:
+        import base64
+        import httpx
+        import asyncio
+        
+        await notify("⏳ Downloading source portrait...")
+        new_file = await context.bot.get_file(photo_id)
+        temp_dir = tempfile.mkdtemp()
+        local_path = os.path.join(temp_dir, "face_src.jpg")
+        await new_file.download_to_drive(local_path)
+        
+        # Convert local image to base64 Data URI
+        with open(local_path, "rb") as f:
+            encoded_data = base64.b64encode(f.read()).decode("utf-8")
+        data_uri = f"data:image/jpeg;base64,{encoded_data}"
+        
+        headers = {
+            "Authorization": f"Bearer {token}",
+            "Content-Type": "application/json"
+        }
+        
+        req_url = "https://api.replicate.com/v1/predictions"
+        payload = {
+            "version": "a07f252abbbd832009640b27f063ea52d87d7a23a185ca165bec23b5adc8deaf",
+            "input": {
+                "image": data_uri,
+                "style": style,
+                "prompt": "a person portrait, high quality, detailed face",
+                "lora_scale": 1.0,
+                "prompt_strength": 4.5,
+                "denoising_strength": 0.65,
+                "instant_id_strength": 0.8,
+                "control_depth_strength": 0.8
+            }
+        }
+        
+        await notify("🚀 Initiating avatar stylization on Replicate...")
+        
+        async with httpx.AsyncClient(timeout=60.0) as client:
+            res = await client.post(req_url, json=payload, headers=headers)
+            if res.status_code != 201:
+                error_detail = res.json().get("detail", res.text)
+                await notify(f"❌ Replicate API Error: {error_detail}")
+                shutil.rmtree(temp_dir, ignore_errors=True)
+                clear_session(chat_id, user_id)
+                return
+                
+            prediction = res.json()
+            poll_url = prediction["urls"]["get"]
+            
+            await notify(f"🎨 Generating {style} avatar... (usually takes 10-15 seconds)")
+            
+            for _ in range(40):
+                await asyncio.sleep(2.0)
+                poll_res = await client.get(poll_url, headers=headers)
+                if poll_res.status_code != 200:
+                    continue
+                    
+                prediction = poll_res.json()
+                status = prediction["status"]
+                
+                if status == "succeeded":
+                    output_urls = prediction.get("output")
+                    if not output_urls or not isinstance(output_urls, list):
+                        await notify("❌ No stylized image received from Replicate.")
+                        shutil.rmtree(temp_dir, ignore_errors=True)
+                        clear_session(chat_id, user_id)
+                        return
+                        
+                    output_url = output_urls[0]
+                    await notify("📥 Downloading final stylized avatar...")
+                    img_res = await client.get(output_url)
+                    if img_res.status_code != 200:
+                        await notify("❌ Error downloading generated image.")
+                        shutil.rmtree(temp_dir, ignore_errors=True)
+                        clear_session(chat_id, user_id)
+                        return
+                        
+                    out_filename = f"stylized_{style.lower().replace(' ', '_')}.png"
+                    out_path = os.path.join(temp_dir, out_filename)
+                    with open(out_path, "wb") as f_out:
+                        f_out.write(img_res.content)
+                        
+                    await notify("📤 Sending stylized photo...")
+                    with open(out_path, "rb") as f_send:
+                        await context.bot.send_photo(
+                            chat_id, 
+                            f_send, 
+                            caption=f"🎭 **Stylized Avatar**\nStyle: `{style}`\n\n💬 **Tip**: Reply to this photo with another edit instruction to keep editing!",
+                            parse_mode="Markdown"
+                        )
+                    # Delete the status message
+                    if hasattr(query_or_msg, "delete"):
+                        try:
+                            await query_or_msg.delete()
+                        except Exception:
+                            pass
+                    shutil.rmtree(temp_dir, ignore_errors=True)
+                    clear_session(chat_id, user_id)
+                    return
+                elif status == "failed":
+                    await notify(f"❌ Avatar generation failed: {prediction.get('error', 'unknown error')}")
+                    shutil.rmtree(temp_dir, ignore_errors=True)
+                    clear_session(chat_id, user_id)
+                    return
+                elif status == "canceled":
+                    await notify("❌ Avatar generation was canceled.")
+                    shutil.rmtree(temp_dir, ignore_errors=True)
+                    clear_session(chat_id, user_id)
+                    return
+                    
+            await notify("⏱️ Avatar generation timed out on Replicate.")
+            shutil.rmtree(temp_dir, ignore_errors=True)
+            clear_session(chat_id, user_id)
+    except Exception as e:
+        logger.error(f"Avatar stylizer error: {e}", exc_info=True)
+        await notify(f"❌ Error: {str(e)}")
+        clear_session(chat_id, user_id)
 
 async def generate_image_with_replicate(chat_id, prompt, update_msg, context):
     load_dotenv(os.path.join(os.path.dirname(__file__), ".env"), override=True)
@@ -2188,6 +2511,8 @@ async def post_init(application):
         BotCommand("images_to_gif", "Combine multiple images into animated GIF"),
         BotCommand("ocr", "Extract text from textbook pages / photos"),
         BotCommand("remove_watermark", "Search and remove specific text watermark from PDF"),
+        BotCommand("avatar", "Stylize a face portrait into Claymation, Pixel Art, 3D, etc."),
+        BotCommand("music", "Generate 10s custom AI lofi/music beats from text prompt"),
     ]
     await application.bot.set_my_commands(commands)
 
@@ -2210,6 +2535,10 @@ def main():
     app.add_handler(CommandHandler("choose", choose_command))
     app.add_handler(CommandHandler("trivia", trivia_command))
     app.add_handler(CommandHandler("ocr", ocr_command))
+    app.add_handler(CommandHandler("avatar", stylize_command))
+    app.add_handler(CommandHandler("stylize", stylize_command))
+    app.add_handler(CommandHandler("music", music_command))
+    app.add_handler(CommandHandler("generate_music", music_command))
     
     # Generic action commands registration
     async def cmd_merge(u, c): await start_action_command(u, c, "merge")
