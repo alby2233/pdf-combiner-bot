@@ -130,6 +130,9 @@ def get_pdf_keyboard():
             InlineKeyboardButton("⚙️ Add Layout Settings", callback_data="action:layout_settings"),
         ],
         [
+            InlineKeyboardButton("📉 Compress PDF", callback_data="action:pdf_compress"),
+        ],
+        [
             InlineKeyboardButton("« Back to Main Menu", callback_data="menu:main")
         ]
     ]
@@ -260,6 +263,249 @@ async def cancel_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     clear_session(chat_id, user_id)
     await update.message.reply_text("❌ Current operation has been cancelled. Use /start to open the dashboard again.")
+
+async def meme_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    chat_id = update.effective_chat.id
+    user_id = update.effective_user.id
+    message = update.message
+    
+    # 1. Parse texts
+    args_str = " ".join(context.args) if context.args else ""
+    if not args_str and message.caption and message.caption.startswith("/meme"):
+        # Strip command
+        caption_parts = message.caption.split()
+        if len(caption_parts) > 1:
+            args_str = message.caption.replace(caption_parts[0], "", 1).strip()
+        
+    if not args_str:
+        await message.reply_text(
+            "⚠️ **Meme Generator Usage**:\n\n"
+            "• Reply to any photo with: `/meme Top Text | Bottom Text`\n"
+            "• Or upload a photo with caption: `/meme Top Text | Bottom Text`\n\n"
+            "Use the `|` symbol to separate top and bottom captions.",
+            parse_mode="Markdown"
+        )
+        return
+        
+    # Split top and bottom
+    parts = args_str.split("|")
+    top_text = parts[0].strip()
+    bottom_text = parts[1].strip() if len(parts) > 1 else ""
+    
+    # 2. Get photo source
+    photo_file = None
+    if message.reply_to_message:
+        reply = message.reply_to_message
+        if reply.photo:
+            photo_file = reply.photo[-1]
+        elif reply.document and is_doc_image(reply.document):
+            photo_file = reply.document
+    elif message.photo:
+        photo_file = message.photo[-1]
+    elif message.document and is_doc_image(message.document):
+        photo_file = message.document
+        
+    if not photo_file:
+        await message.reply_text("⚠️ Please reply to a photo message, or upload a photo with this command to generate a meme.")
+        return
+        
+    status_msg = await message.reply_text("⏳ Generating meme...")
+    try:
+        temp_dir = tempfile.mkdtemp()
+        file_name = "src_photo.jpg"
+        src_path = os.path.join(temp_dir, file_name)
+        out_path = os.path.join(temp_dir, "meme_output.jpg")
+        
+        # Download photo
+        new_file = await context.bot.get_file(photo_file.file_id)
+        await new_file.download_to_drive(src_path)
+        
+        # Generate meme
+        from meme_utils import generate_meme
+        generate_meme(src_path, top_text, bottom_text, out_path)
+        
+        # Send meme back
+        await message.reply_chat_action("upload_photo")
+        with open(out_path, "rb") as f:
+            await message.reply_photo(f, caption="🎭 Here is your meme!")
+            
+        await status_msg.delete()
+        
+        # Clean up temp
+        try:
+            shutil.rmtree(temp_dir)
+        except Exception:
+            pass
+    except Exception as e:
+        logger.error(f"Meme generation error: {e}", exc_info=True)
+        await status_msg.edit_text(f"❌ Error generating meme: {str(e)}")
+
+async def download_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    message = update.message
+    if not context.args:
+        await message.reply_text(
+            "⚠️ **Social Downloader Usage**:\n\n"
+            "• `/download <URL>` or `/dl <URL>`\n\n"
+            "Supports: YouTube, TikTok, Instagram Reels, Twitter, and more!",
+            parse_mode="Markdown"
+        )
+        return
+        
+    url = context.args[0].strip()
+    status_msg = await message.reply_text("⏳ Analyzing video link and starting download...")
+    
+    try:
+        import yt_dlp
+        import tempfile
+        import shutil
+        import asyncio
+        
+        temp_dir = tempfile.mkdtemp()
+        
+        # yt-dlp options
+        ydl_opts = {
+            'outtmpl': os.path.join(temp_dir, 'video.%(ext)s'),
+            'format': 'best[filesize<48M]/bestvideo[filesize<40M]+bestaudio[filesize<8M]/best',
+            'merge_output_format': 'mp4',
+            'nooverwrites': True,
+            'max_filesize': 49 * 1024 * 1024,
+            'quiet': True,
+            'noprogress': True,
+        }
+        
+        # Run yt-dlp in executor to not block async loop
+        def run_ydl():
+            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                info = ydl.extract_info(url, download=True)
+                filename = ydl.prepare_filename(info)
+                base_without_ext = os.path.splitext(filename)[0]
+                possible_files = [filename, base_without_ext + ".mp4", base_without_ext + ".mkv"]
+                for pf in possible_files:
+                    if os.path.exists(pf):
+                        return pf, info.get("title", "Video")
+                return None, None
+
+        loop = asyncio.get_event_loop()
+        file_path, video_title = await loop.run_in_executor(None, run_ydl)
+        
+        if not file_path or not os.path.exists(file_path):
+            raise Exception("Could not retrieve downloaded file. File might be too large (>50MB) or format is unsupported.")
+            
+        await status_msg.edit_text("📤 Uploading video to Telegram...")
+        
+        # Send as video if it has standard video formats, else as document
+        ext = os.path.splitext(file_path)[1].lower()
+        await message.reply_chat_action("upload_video")
+        
+        with open(file_path, "rb") as f:
+            if ext in [".mp4", ".mov", ".m4v"]:
+                await message.reply_video(f, caption=f"📹 **{video_title}**", parse_mode="Markdown")
+            else:
+                await message.reply_document(f, filename=os.path.basename(file_path), caption=f"📄 **{video_title}**", parse_mode="Markdown")
+                
+        await status_msg.delete()
+        
+        # Clean up temp
+        try:
+            shutil.rmtree(temp_dir)
+        except Exception:
+            pass
+            
+    except Exception as e:
+        logger.error(f"Download error: {e}", exc_info=True)
+        await status_msg.edit_text(f"❌ Error downloading video:\n`{str(e)}`", parse_mode="Markdown")
+
+async def choose_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    message = update.message
+    input_text = " ".join(context.args) if context.args else ""
+    
+    if "," in input_text:
+        options = [opt.strip() for opt in input_text.split(",") if opt.strip()]
+    else:
+        options = [opt.strip() for opt in input_text.split() if opt.strip()]
+        
+    if not options:
+        await message.reply_text(
+            "⚠️ **Group Decision Maker Usage**:\n\n"
+            "• `/choose option1, option2, option3`\n"
+            "• `/choose option1 option2 option3`\n\n"
+            "The bot will randomly select one of your choices!",
+            parse_mode="Markdown"
+        )
+        return
+        
+    import random
+    import asyncio
+    selected = random.choice(options)
+    suspense_msg = await message.reply_text("🤔 Selecting a choice... 🎲")
+    await asyncio.sleep(1.0)
+    await suspense_msg.edit_text(f"🔮 **I choose:** `{selected}`", parse_mode="Markdown")
+
+async def trivia_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    chat_id = update.effective_chat.id
+    message = update.message
+    
+    if not GEMINI_API_KEY:
+        await message.reply_text("⚠️ Google Gemini AI is not configured. Trivia command is unavailable.")
+        return
+        
+    status_msg = await message.reply_text("🎲 Generating a fun trivia question using Gemini AI...")
+    await update.message.reply_chat_action("typing")
+    
+    try:
+        import json
+        import asyncio
+        
+        prompt = (
+            "Generate a single multiple-choice trivia question for a fun group game. "
+            "The question must be interesting, have exactly 4 options, and have exactly one correct option. "
+            "Respond ONLY with a valid JSON object. Do not include markdown code block syntax (like ```json). "
+            "JSON structure MUST be exactly:\n"
+            "{\n"
+            "  \"question\": \"The question text\",\n"
+            "  \"options\": [\"Option A\", \"Option B\", \"Option C\", \"Option D\"],\n"
+            "  \"correct_option_index\": 0\n"
+            "}\n"
+            "Ensure correct_option_index is a number from 0 to 3."
+        )
+        
+        model = genai.GenerativeModel(GEMINI_MODEL)
+        loop = asyncio.get_running_loop()
+        response = await loop.run_in_executor(
+            None, lambda: model.generate_content(prompt)
+        )
+        
+        resp_text = response.text.strip()
+        if resp_text.startswith("```"):
+            lines = resp_text.splitlines()
+            if lines[0].startswith("```"):
+                lines = lines[1:]
+            if lines[-1].startswith("```"):
+                lines = lines[:-1]
+            resp_text = "\n".join(lines).strip()
+            
+        data = json.loads(resp_text)
+        
+        question = data["question"]
+        options = data["options"]
+        correct_index = int(data["correct_option_index"])
+        
+        if len(options) != 4 or not (0 <= correct_index <= 3):
+            raise Exception("Invalid trivia formatting returned by AI.")
+            
+        await status_msg.delete()
+        
+        await context.bot.send_poll(
+            chat_id=chat_id,
+            question=question,
+            options=options,
+            type="quiz",
+            correct_option_id=correct_index,
+            is_anonymous=False
+        )
+    except Exception as e:
+        logger.error(f"Trivia error: {e}")
+        await status_msg.edit_text(f"❌ Error generating trivia: {str(e)}")
 
 async def start_action_command(update: Update, context: ContextTypes.DEFAULT_TYPE, action: str):
     chat_id = update.effective_chat.id
@@ -443,6 +689,13 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         session = get_session(chat_id, user_id)
         session["rotation_angle"] = angle
         await query.edit_message_text(f"⏳ Rotating PDF pages by {angle}°...")
+        await execute_operation(query, session, chat_id, user_id, context)
+        
+    elif data.startswith("compress_level:"):
+        level = data.split(":")[1]
+        session = get_session(chat_id, user_id)
+        session["compress_level"] = level
+        await query.edit_message_text(f"⏳ Compressing PDF (level: `{level}`)...")
         await execute_operation(query, session, chat_id, user_id, context)
         
     elif data.startswith("img_rotate_angle:"):
@@ -1034,7 +1287,7 @@ async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE):
         prompt_msg = await update.message.reply_text("⏳ Processing file uploads...")
         await start_layout_config_flow(prompt_msg, session)
         
-    elif action in ["pdf2word", "pdf2ppt", "pdf2excel", "pdf2images", "layout_settings", "split", "rotate"]:
+    elif action in ["pdf2word", "pdf2ppt", "pdf2excel", "pdf2images", "layout_settings", "split", "rotate", "pdf_compress"]:
         if file_ext != ".pdf":
             await update.message.reply_text("⚠️ Invalid file type! Please upload a PDF file.")
             session["files"].pop()
@@ -1043,6 +1296,27 @@ async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE):
         if action == "layout_settings":
             prompt_msg = await update.message.reply_text("⏳ Processing PDF file...")
             await start_layout_config_flow(prompt_msg, session)
+        elif action == "pdf_compress":
+            keyboard = InlineKeyboardMarkup([
+                [
+                    InlineKeyboardButton("🟢 Low (Lossless)", callback_data="compress_level:low"),
+                    InlineKeyboardButton("🟡 Medium (60%)", callback_data="compress_level:medium"),
+                ],
+                [
+                    InlineKeyboardButton("🔴 High (30% + Resize)", callback_data="compress_level:high"),
+                ],
+                [
+                    InlineKeyboardButton("❌ Cancel", callback_data="btn:cancel")
+                ]
+            ])
+            await update.message.reply_text(
+                "📉 **Choose PDF Compression Level**:\n\n"
+                "• **Low**: Lossless cleanups (safe, small reduction)\n"
+                "• **Medium**: Compresses photos inside to 60% quality (best balance)\n"
+                "• **High**: Compresses photos to 30% and resizes large images (max size savings)",
+                reply_markup=keyboard,
+                parse_mode="Markdown"
+            )
         elif action == "split":
             session["step"] = "waiting_for_split_range"
             await update.message.reply_text(
@@ -1394,6 +1668,15 @@ async def execute_operation(msg_or_query, session, chat_id, user_id, context):
             output_path = os.path.join(temp_dir, output_filename)
             shutil.copy(input_file, output_path)
             
+        elif action == "pdf_compress":
+            input_file = files[0]
+            level = session.get("compress_level", "medium")
+            output_filename = "compressed_" + os.path.basename(input_file)
+            output_path = os.path.join(temp_dir, output_filename)
+            await notify(f"⏳ Compressing PDF (level: `{level}`)...")
+            from compress_utils import compress_pdf
+            compress_pdf(input_file, output_path, level=level)
+            
         elif action == "ppt2images":
             input_file = files[0]
             output_subdir = os.path.join(temp_dir, "ppt_slides")
@@ -1499,6 +1782,11 @@ async def post_init(application):
         BotCommand("img_grayscale", "Convert image to grayscale"),
         BotCommand("generate", "Generate an image using active AI model"),
         BotCommand("set_model", "Change Replicate image gen and edit models"),
+        BotCommand("pdf_compress", "Compress PDF document file size"),
+        BotCommand("meme", "Overlay text on photo to generate a meme"),
+        BotCommand("download", "Download social media videos (YouTube, TikTok, etc.)"),
+        BotCommand("choose", "Randomly select one option from a list"),
+        BotCommand("trivia", "Start a group AI quiz poll game"),
     ]
     await application.bot.set_my_commands(commands)
 
@@ -1515,6 +1803,11 @@ def main():
     app.add_handler(CommandHandler("generate", generate_command))
     app.add_handler(CommandHandler("generate_image", generate_command))
     app.add_handler(CommandHandler("set_model", set_model_command))
+    app.add_handler(CommandHandler("meme", meme_command))
+    app.add_handler(CommandHandler("download", download_command))
+    app.add_handler(CommandHandler("dl", download_command))
+    app.add_handler(CommandHandler("choose", choose_command))
+    app.add_handler(CommandHandler("trivia", trivia_command))
     
     # Generic action commands registration
     async def cmd_merge(u, c): await start_action_command(u, c, "merge")
@@ -1535,12 +1828,15 @@ def main():
     async def cmd_img_compress(u, c): await start_action_command(u, c, "img_compress")
     async def cmd_img_convert(u, c): await start_action_command(u, c, "img_convert")
     async def cmd_img_grayscale(u, c): await start_action_command(u, c, "img_grayscale")
+    async def cmd_pdf_compress(u, c): await start_action_command(u, c, "pdf_compress")
 
     app.add_handler(CommandHandler("merge", cmd_merge))
     app.add_handler(CommandHandler("split", cmd_split))
     app.add_handler(CommandHandler("rotate", cmd_rotate))
     app.add_handler(CommandHandler("layout", cmd_layout))
     app.add_handler(CommandHandler("layout_settings", cmd_layout))
+    app.add_handler(CommandHandler("pdf_compress", cmd_pdf_compress))
+    app.add_handler(CommandHandler("compress", cmd_pdf_compress))
     
     app.add_handler(CommandHandler("word2pdf", cmd_word2pdf))
     app.add_handler(CommandHandler("word_to_pdf", cmd_word2pdf))
