@@ -1229,11 +1229,10 @@ async def edit_image_with_replicate(chat_id, src_path, prompt, update_msg, conte
                         
                     await update_msg.edit_text("📤 Sending finished image to Telegram...")
                     with open(out_path, "rb") as f_send:
-                        await context.bot.send_document(
+                        await context.bot.send_photo(
                             chat_id, 
                             f_send, 
-                            filename=out_filename, 
-                            caption=f"✅ Image edited via prompt: *{prompt}*",
+                            caption=f"✅ Image edited via prompt: *{prompt}*\n\n💬 **Tip**: Reply to this photo with another edit instruction to keep editing!",
                             parse_mode="Markdown"
                         )
                     await update_msg.delete()
@@ -1329,7 +1328,7 @@ async def generate_image_with_replicate(chat_id, prompt, update_msg, context):
                         await context.bot.send_photo(
                             chat_id, 
                             f_send, 
-                            caption=f"✅ Generated via `{CURRENT_IMAGE_MODEL}`:\n*{prompt}*",
+                            caption=f"✅ Generated via `{CURRENT_IMAGE_MODEL}`:\n*{prompt}*\n\n💬 **Tip**: Reply to this photo with an edit instruction (e.g. *\"add a hat\"*) to modify it!",
                             parse_mode="Markdown"
                         )
                     await update_msg.delete()
