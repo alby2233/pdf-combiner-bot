@@ -313,6 +313,7 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "• `/trivia` - Start a Gemini AI-powered quiz poll in the group\n\n"
         "🤖 **Google Gemini & Antigravity AI**:\n"
         "• `/code <snippet>` - Audit code, debug error stack traces & optimize logic\n"
+        "• `/summarize <URL>` - Read webpage / article & extract key executive takeaways\n"
         "• Direct DM: Send any text message to chat directly.\n"
         "• Group Chats: Mention the bot (e.g. @" + bot_username + " question) or reply to any bot message.\n\n"
         "❌ **Control**:\n"
@@ -1329,6 +1330,84 @@ async def code_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except Exception as e:
         logger.error(f"Antigravity Code Auditor error: {e}", exc_info=True)
         await status_msg.edit_text(f"❌ Error during code review: {str(e)}")
+
+async def summarize_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    chat_id = update.effective_chat.id
+    message = update.message
+    
+    args_str = " ".join(context.args) if context.args else ""
+    if not args_str and message.reply_to_message and message.reply_to_message.text:
+        args_str = message.reply_to_message.text
+        
+    if not args_str:
+        await message.reply_text(
+            "🌐 **AI Web Summarizer Usage**:\n\n"
+            "• `/summarize https://example.com/article`\n"
+            "• Or reply to any long article/text message with `/summarize`\n\n"
+            "Gemini AI will extract key takeaways and provide an executive summary!",
+            parse_mode="Markdown"
+        )
+        return
+        
+    if not GEMINI_API_KEY:
+        await message.reply_text("⚠️ Google Gemini AI is not configured.")
+        return
+        
+    status_msg = await message.reply_text("🌐 **Antigravity AI**: Reading webpage content and summarizing key takeaways...")
+    await message.reply_chat_action("typing")
+    
+    try:
+        import asyncio
+        import httpx
+        import re
+        
+        text_content = args_str
+        
+        url_match = re.search(r'https?://[^\s]+', args_str)
+        if url_match:
+            target_url = url_match.group(0)
+            async with httpx.AsyncClient(timeout=20.0, follow_redirects=True) as client:
+                res = await client.get(target_url, headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"})
+                if res.status_code == 200:
+                    try:
+                        from bs4 import BeautifulSoup
+                        soup = BeautifulSoup(res.text, "html.parser")
+                        for element in soup(["script", "style", "nav", "footer", "header"]):
+                            element.extract()
+                        raw_extracted = soup.get_text(separator=" ", strip=True)
+                    except Exception:
+                        raw_extracted = re.sub(r'<[^>]+>', ' ', res.text)
+                    text_content = f"URL: {target_url}\n\nPAGE CONTENT:\n{raw_extracted[:8000]}"
+                    
+        system_prompt = (
+            "You are Antigravity, an expert Executive Research Assistant. "
+            "Summarize the provided article, web page content, or text.\n\n"
+            "STRUCTURE YOUR RESPONSE CLEARLY AS FOLLOWS:\n"
+            "📌 **Executive Summary**: A concise 2-3 sentence overview.\n"
+            "🔑 **Key Takeaways**: Bullet points highlighting main arguments and data.\n"
+            "⏱️ **Estimated Reading Time**: Total read time."
+        )
+        
+        full_prompt = f"{system_prompt}\n\nCONTENT TO SUMMARIZE:\n{text_content}"
+        
+        model = genai.GenerativeModel(GEMINI_MODEL)
+        loop = asyncio.get_running_loop()
+        response = await loop.run_in_executor(
+            None, lambda: model.generate_content(full_prompt)
+        )
+        
+        res_text = response.text if hasattr(response, "text") else "No summary generated."
+        header = "🌐 **AI Web Page & Article Summary**:\n\n"
+        full_message = header + res_text
+        
+        try:
+            await status_msg.edit_text(full_message, parse_mode="Markdown")
+        except Exception:
+            await status_msg.edit_text(full_message)
+            
+    except Exception as e:
+        logger.error(f"Summarizer error: {e}", exc_info=True)
+        await status_msg.edit_text(f"❌ Error summarizing content: {str(e)}")
 
 async def seminar_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.effective_chat.id
@@ -3283,6 +3362,7 @@ async def post_init(application):
         BotCommand("seminar", "Create full Seminar PowerPoint slides & Word Report from topic"),
         BotCommand("website", "Antigravity AI: Create interactive web page / HTML app from prompt"),
         BotCommand("code", "Antigravity AI: Audit code, debug error traces & optimize performance"),
+        BotCommand("summarize", "Antigravity AI: Read webpage URL / article & extract key takeaways"),
         BotCommand("upscale", "Upscale low-res photo to high-res 4K image"),
         BotCommand("tts", "Convert text to speech/voice note using Suno Bark"),
     ]
@@ -3319,6 +3399,7 @@ def main():
     app.add_handler(CommandHandler("webapp", webapp_command))
     app.add_handler(CommandHandler("code", code_command))
     app.add_handler(CommandHandler("debug", code_command))
+    app.add_handler(CommandHandler("summarize", summarize_command))
     app.add_handler(CommandHandler("upscale", upscale_command))
     app.add_handler(CommandHandler("tts", tts_command))
     app.add_handler(CommandHandler("speak", tts_command))
