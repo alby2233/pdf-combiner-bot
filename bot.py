@@ -3175,6 +3175,31 @@ def main():
     # Register text inputs for layout text setups and split ranges
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_text))
     
+    # Start background HTTP health check server for Render / Koyeb 100% Free Web Service hosting
+    def start_dummy_health_check_server():
+        import threading
+        from http.server import HTTPServer, BaseHTTPRequestHandler
+
+        class HealthHandler(BaseHTTPRequestHandler):
+            def do_GET(self):
+                self.send_response(200)
+                self.end_headers()
+                self.wfile.write(b"Telegram Bot is running 24/7!")
+
+            def log_message(self, format, *args):
+                pass
+
+        port = int(os.getenv("PORT", "10000"))
+        try:
+            server = HTTPServer(("0.0.0.0", port), HealthHandler)
+            t = threading.Thread(target=server.serve_forever, daemon=True)
+            t.start()
+            logger.info(f"Health check HTTP server listening on port {port}")
+        except Exception as e:
+            logger.warning(f"Could not start dummy health check server: {e}")
+
+    start_dummy_health_check_server()
+    
     logger.info("Bot started successfully in polling mode. Press Ctrl+C to stop.")
     app.run_polling()
 
