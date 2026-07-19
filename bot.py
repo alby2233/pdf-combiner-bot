@@ -879,7 +879,7 @@ async def upscale_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def gtts_fallback(update, context, text, status_msg):
     try:
-        await status_msg.edit_text("⏳ Synthesizing voice note using Free Google TTS Engine...")
+        await status_msg.edit_text("⏳ Synthesizing voice note...")
         from gtts import gTTS
         import asyncio
         loop = asyncio.get_running_loop()
@@ -2434,7 +2434,7 @@ async def execute_avatar_stylize(query_or_msg, session, chat_id, user_id, contex
 
 async def pollinations_image_fallback(chat_id, prompt, update_msg, context):
     try:
-        await update_msg.edit_text("⏳ Generating image using Free Unlimited AI Engine (Pollinations.ai)...")
+        await update_msg.edit_text("⏳ Generating image...")
         import httpx
         import urllib.parse
         encoded_prompt = urllib.parse.quote(prompt)
@@ -2453,7 +2453,7 @@ async def pollinations_image_fallback(chat_id, prompt, update_msg, context):
                     await context.bot.send_photo(
                         chat_id,
                         f_send,
-                        caption=f"🎨 **Generated Image**: *{prompt}*\n✨ Powered by Free Unlimited AI Engine.",
+                        caption=f"🎨 **Generated Image**: *{prompt}*",
                         parse_mode="Markdown"
                     )
                 await update_msg.delete()
