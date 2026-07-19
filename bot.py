@@ -283,7 +283,8 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "• `/excel_to_pdf` - Convert Excel to PDF\n"
         "• `/pdf_to_excel` - Convert PDF to Excel\n"
         "• `/chart` - Generate Bar/Line/Pie charts from Excel/CSV\n"
-        "• `/seminar <topic>` - Generate full Seminar PPT presentation & Word Report\n\n"
+        "• `/seminar <topic>` - Generate full Seminar PPT presentation & Word Report\n"
+        "• `/website <prompt>` - Antigravity AI: Build interactive HTML5 web app / page\n\n"
         "🖼️ **Image & GIF Utilities**:\n"
         "• `/images_to_pdf` - Combine photos into a single PDF\n"
         "• `/pdf_to_images` - Export PDF pages as a ZIP of images\n"
@@ -1118,6 +1119,109 @@ async def stylize_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         reply_markup=keyboard,
         parse_mode="Markdown"
     )
+
+async def webapp_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    chat_id = update.effective_chat.id
+    message = update.message
+    
+    args_str = " ".join(context.args) if context.args else ""
+    if not args_str and message.reply_to_message and message.reply_to_message.text:
+        args_str = message.reply_to_message.text
+        
+    if not args_str:
+        await message.reply_text(
+            "⚡ **Antigravity AI Web Page Creator Usage**:\n\n"
+            "• `/website A futuristic dark-mode portfolio for a web developer`\n"
+            "• `/webapp Interactive Pomodoro study timer with sound effects`\n"
+            "• `/website Modern SaaS product landing page with pricing cards`\n\n"
+            "The bot will design a complete, self-contained, interactive HTML5/CSS3/JS web page and send you the `.html` file & `.zip` package!",
+            parse_mode="Markdown"
+        )
+        return
+        
+    if not GEMINI_API_KEY:
+        await message.reply_text("⚠️ Google Gemini AI is not configured.")
+        return
+        
+    status_msg = await message.reply_text("⚡ **Antigravity AI**: Designing layout, styling CSS, and coding JavaScript logic...")
+    await message.reply_chat_action("typing")
+    
+    try:
+        import asyncio
+        import zipfile
+        import re
+        
+        system_prompt = (
+            "You are Antigravity, a world-class AI Web Developer. "
+            "Generate a complete, production-grade, self-contained single-file HTML web application based on the user prompt.\n\n"
+            "STRICT DESIGN & CODE REQUIREMENTS:\n"
+            "1. Output MUST be a single valid HTML5 document containing all HTML, embedded CSS within <style>, and JavaScript within <script>.\n"
+            "2. STYLING (CSS): Use stunning modern aesthetics—vibrant curated HSL color palettes, dark mode, smooth glassmorphism, flexbox/grid layout, Google Fonts (e.g. Inter/Roboto), smooth hover transitions, micro-animations, and responsive media queries.\n"
+            "3. LOGIC (JS): Implement full interactive JavaScript functionality (e.g. functional buttons, dark/light toggle, dynamic calculators, interactive cards, smooth scrolling, modal dialogs, local storage saving if applicable).\n"
+            "4. NO PLACEHOLDERS: Create complete text content, features, and realistic UI elements.\n"
+            "5. OUTPUT FORMAT: Return ONLY the code inside ```html ... ``` block. Do not include markdown chatter outside the code block."
+        )
+        
+        full_user_prompt = f"{system_prompt}\n\nUSER REQUEST: {args_str}"
+        
+        model = genai.GenerativeModel(GEMINI_MODEL)
+        loop = asyncio.get_running_loop()
+        response = await loop.run_in_executor(
+            None, lambda: model.generate_content(full_user_prompt)
+        )
+        
+        raw_text = response.text if hasattr(response, "text") else ""
+        
+        html_code = ""
+        match = re.search(r"```html\s*(.*?)\s*```", raw_text, re.DOTALL | re.IGNORECASE)
+        if match:
+            html_code = match.group(1).strip()
+        elif "<!DOCTYPE html>" in raw_text or "<html" in raw_text:
+            html_code = raw_text.strip()
+        else:
+            html_code = f"<!DOCTYPE html>\n<html>\n<head><title>Web Page</title></head>\n<body>{raw_text}</body>\n</html>"
+            
+        temp_dir = tempfile.mkdtemp()
+        html_filename = "index.html"
+        html_path = os.path.join(temp_dir, html_filename)
+        with open(html_path, "w", encoding="utf-8") as f:
+            f.write(html_code)
+            
+        zip_filename = "web_application.zip"
+        zip_path = os.path.join(temp_dir, zip_filename)
+        with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as zipf:
+            zipf.write(html_path, arcname="index.html")
+            
+        await status_msg.edit_text("📤 Uploading web application files to Telegram...")
+        
+        with open(html_path, "rb") as f_html:
+            await context.bot.send_document(
+                chat_id,
+                f_html,
+                filename="index.html",
+                caption=(
+                    f"✨ **Antigravity AI Web Page Created!**\n\n"
+                    f"🎯 **Topic**: \"_{args_str[:60]}..._\"\n"
+                    "📄 `index.html` (Double-click to open in any browser!)"
+                ),
+                parse_mode="Markdown"
+            )
+            
+        with open(zip_path, "rb") as f_zip:
+            await context.bot.send_document(
+                chat_id,
+                f_zip,
+                filename="website_package.zip",
+                caption="📦 **Complete Web Application ZIP Archive**",
+                parse_mode="Markdown"
+            )
+            
+        await status_msg.delete()
+        shutil.rmtree(temp_dir, ignore_errors=True)
+        
+    except Exception as e:
+        logger.error(f"Antigravity Web Page error: {e}", exc_info=True)
+        await status_msg.edit_text(f"❌ Error generating web page: {str(e)}")
 
 async def seminar_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.effective_chat.id
@@ -3051,6 +3155,7 @@ async def post_init(application):
         BotCommand("avatar", "Stylize a face portrait into Claymation, Pixel Art, 3D, etc."),
         BotCommand("music", "Generate 10s custom AI lofi/music beats from text prompt"),
         BotCommand("seminar", "Create full Seminar PowerPoint slides & Word Report from topic"),
+        BotCommand("website", "Antigravity AI: Create interactive web page / HTML app from prompt"),
         BotCommand("upscale", "Upscale low-res photo to high-res 4K image"),
         BotCommand("tts", "Convert text to speech/voice note using Suno Bark"),
     ]
@@ -3083,6 +3188,8 @@ def main():
     app.add_handler(CommandHandler("generate_music", music_command))
     app.add_handler(CommandHandler("seminar", seminar_command))
     app.add_handler(CommandHandler("create_seminar", seminar_command))
+    app.add_handler(CommandHandler("website", webapp_command))
+    app.add_handler(CommandHandler("webapp", webapp_command))
     app.add_handler(CommandHandler("upscale", upscale_command))
     app.add_handler(CommandHandler("tts", tts_command))
     app.add_handler(CommandHandler("speak", tts_command))
