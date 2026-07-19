@@ -235,6 +235,7 @@ async def set_model_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text(prompt, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="Markdown")
 
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    bot_username = context.bot.username or "slow_gokubot"
     help_text = (
         "💡 **PDF & Office Bot Help**\n\n"
         "Here are all the direct commands you can run:\n\n"
@@ -272,7 +273,7 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "🎨 **AI Image Generation & Editing (Replicate)**:\n"
         "• `/generate <prompt>` - Generate a new image from scratch\n"
         "• `/set_model` - Select active generation/editing model dynamically\n"
-        "• **Prompt Editing**: Reply to any photo (or upload with caption) and mention the bot with an edit instruction (e.g. `@pptpdf_bot blur background`)\n"
+        "• **Prompt Editing**: Reply to any photo (or upload with caption) and mention the bot with an edit instruction (e.g. @" + bot_username + " blur background)\n"
         "• `/avatar` - Stylize portrait face into Claymation, Pixel Art, 3D, etc.\n"
         "• `/upscale` - Upscale and enhance low-res photo to high-res 4K\n"
         "• `/meme Top Text | Bottom Text` - Overlay text on image to make a meme\n\n"
@@ -284,7 +285,7 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "• `/trivia` - Start a Gemini AI-powered quiz poll in the group\n\n"
         "🤖 **Google Gemini AI**:\n"
         "• Direct DM: Send any text message to chat directly.\n"
-        "• Group Chats: Mention the bot (e.g. `@pptpdf_bot question`) or reply to any bot message.\n\n"
+        "• Group Chats: Mention the bot (e.g. @" + bot_username + " question) or reply to any bot message.\n\n"
         "❌ **Control**:\n"
         "• Use `/cancel` at any time to abort the current operation."
     )
