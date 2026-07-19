@@ -49,6 +49,32 @@ if GEMINI_API_KEY:
 
 # In-memory user sessions tracking: key=(chat_id, user_id), value=dict
 USER_SESSIONS = {}
+GROUP_ACTIVE_USERS = {}
+
+def register_active_group_user(update: Update):
+    if not update or not update.effective_chat or not update.effective_user:
+        return
+    is_group = update.effective_chat.type in ["group", "supergroup"]
+    if not is_group:
+        return
+        
+    chat_id = update.effective_chat.id
+    user = update.effective_user
+    if user.is_bot:
+        return
+        
+    name = user.first_name
+    username = f"@{user.username}" if user.username else name
+    user_entry = {"id": user.id, "name": name, "username": username}
+    
+    if chat_id not in GROUP_ACTIVE_USERS:
+        GROUP_ACTIVE_USERS[chat_id] = []
+        
+    GROUP_ACTIVE_USERS[chat_id] = [u for u in GROUP_ACTIVE_USERS[chat_id] if u["id"] != user.id]
+    GROUP_ACTIVE_USERS[chat_id].append(user_entry)
+    
+    if len(GROUP_ACTIVE_USERS[chat_id]) > 30:
+        GROUP_ACTIVE_USERS[chat_id].pop(0)
 
 def get_session(chat_id, user_id):
     key = (chat_id, user_id)
@@ -281,7 +307,8 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "• `/download <link>` - Download videos from YouTube, TikTok, Reels, etc.\n"
         "• `/music <prompt>` - Generate 10s custom AI lofi/music beats from text\n"
         "• `/tts <text>` - Convert text to voice note/speech using Suno Bark\n"
-        "• `/choose <options>` - Randomly pick an option from a list\n"
+        "• `/choose <options>` - Randomly pick an option from a list (or pick active group member)\n"
+        "• `/members` - View current pool of active group members\n"
         "• `/trivia` - Start a Gemini AI-powered quiz poll in the group\n\n"
         "🤖 **Google Gemini AI**:\n"
         "• Direct DM: Send any text message to chat directly.\n"
@@ -450,8 +477,39 @@ async def download_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 async def choose_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     message = update.message
+    chat_id = update.effective_chat.id
+    is_group = update.effective_chat.type in ["group", "supergroup"]
+    
     input_text = " ".join(context.args) if context.args else ""
     
+    if not input_text and is_group:
+        active_list = GROUP_ACTIVE_USERS.get(chat_id, [])
+        if active_list:
+            import random
+            import asyncio
+            selected_user = random.choice(active_list)
+            pool_str = ", ".join([u["name"] for u in active_list])
+            suspense_msg = await message.reply_text("🎲 **Picking randomly from active chat members...** 🎲")
+            await asyncio.sleep(1.0)
+            
+            mention_name = selected_user["username"] if selected_user["username"].startswith("@") else selected_user["name"]
+            await suspense_msg.edit_text(
+                f"🔮 **I choose:** {mention_name}\n\n"
+                f"👥 *Pool (active members)*: {pool_str}",
+                parse_mode="Markdown"
+            )
+            return
+        else:
+            await message.reply_text(
+                "🎲 **Group Decision Maker**\n\n"
+                "I haven't recorded any active members in this chat yet! "
+                "Once people send a few text/media messages, I will be able to pick from them automatically.\n\n"
+                "💡 Alternatively, specify options manually:\n"
+                "`/choose Alice, Bob, Charlie`",
+                parse_mode="Markdown"
+            )
+            return
+            
     if "," in input_text:
         options = [opt.strip() for opt in input_text.split(",") if opt.strip()]
     else:
@@ -473,6 +531,27 @@ async def choose_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     suspense_msg = await message.reply_text("🤔 Selecting a choice... 🎲")
     await asyncio.sleep(1.0)
     await suspense_msg.edit_text(f"🔮 **I choose:** `{selected}`", parse_mode="Markdown")
+
+async def active_members_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    chat_id = update.effective_chat.id
+    is_group = update.effective_chat.type in ["group", "supergroup"]
+    
+    if not is_group:
+        await update.message.reply_text("⚠️ This command is only usable inside group chats.")
+        return
+        
+    active_list = GROUP_ACTIVE_USERS.get(chat_id, [])
+    if not active_list:
+        await update.message.reply_text("👥 No active members recorded in this chat yet. Send some messages to build the pool!")
+        return
+        
+    lines = [f"• {u['name']} ({u['username']})" for u in active_list]
+    await update.message.reply_text(
+        f"👥 **Active Group Members (Decision Pool)**:\n\n" + "\n".join(lines) + 
+        f"\n\n💬 *Total Pool Size*: `{len(active_list)}`\n"
+        "💡 *Tip*: Run `/choose` without any parameters to randomly pick one of these members!",
+        parse_mode="Markdown"
+    )
 
 async def trivia_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.effective_chat.id
@@ -2123,6 +2202,7 @@ async def generate_image_with_replicate(chat_id, prompt, update_msg, context):
 # --- File Message Handling ---
 
 async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    register_active_group_user(update)
     chat_id = update.effective_chat.id
     user_id = update.effective_user.id
     is_group = update.effective_chat.type in ["group", "supergroup"]
@@ -2386,6 +2466,7 @@ async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await execute_operation(update.message, session, chat_id, user_id, context)
 
 async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    register_active_group_user(update)
     chat_id = update.effective_chat.id
     user_id = update.effective_user.id
     is_group = update.effective_chat.type in ["group", "supergroup"]
@@ -2478,6 +2559,7 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # --- Text Message Input Handler (Config States) ---
 
 async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    register_active_group_user(update)
     chat_id = update.effective_chat.id
     user_id = update.effective_user.id
     text = update.message.text.strip()
@@ -2956,7 +3038,8 @@ async def post_init(application):
         BotCommand("pdf_compress", "Compress PDF document file size"),
         BotCommand("meme", "Overlay text on photo to generate a meme"),
         BotCommand("download", "Download social media videos (YouTube, TikTok, etc.)"),
-        BotCommand("choose", "Randomly select one option from a list"),
+        BotCommand("choose", "Randomly select one option from a list or pick active member"),
+        BotCommand("members", "View list of active group members in the decision pool"),
         BotCommand("trivia", "Start a group AI quiz poll game"),
         BotCommand("video_to_gif", "Convert a video clip into animated GIF"),
         BotCommand("images_to_gif", "Combine multiple images into animated GIF"),
@@ -2987,6 +3070,8 @@ def main():
     app.add_handler(CommandHandler("download", download_command))
     app.add_handler(CommandHandler("dl", download_command))
     app.add_handler(CommandHandler("choose", choose_command))
+    app.add_handler(CommandHandler("members", active_members_command))
+    app.add_handler(CommandHandler("active", active_members_command))
     app.add_handler(CommandHandler("trivia", trivia_command))
     app.add_handler(CommandHandler("ocr", ocr_command))
     app.add_handler(CommandHandler("avatar", stylize_command))
