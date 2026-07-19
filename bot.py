@@ -255,7 +255,8 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "• `/pdf_to_ppt` - Convert PDF to PowerPoint\n"
         "• `/excel_to_pdf` - Convert Excel to PDF\n"
         "• `/pdf_to_excel` - Convert PDF to Excel\n"
-        "• `/chart` - Generate Bar/Line/Pie charts from Excel/CSV\n\n"
+        "• `/chart` - Generate Bar/Line/Pie charts from Excel/CSV\n"
+        "• `/seminar <topic>` - Generate full Seminar PPT presentation & Word Report\n\n"
         "🖼️ **Image & GIF Utilities**:\n"
         "• `/images_to_pdf` - Combine photos into a single PDF\n"
         "• `/pdf_to_images` - Export PDF pages as a ZIP of images\n"
@@ -793,6 +794,195 @@ async def stylize_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         parse_mode="Markdown"
     )
 
+async def seminar_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    chat_id = update.effective_chat.id
+    user_id = update.effective_user.id
+    message = update.message
+    
+    args_str = " ".join(context.args) if context.args else ""
+    if not args_str and message.caption and (message.caption.startswith("/seminar") or message.caption.startswith("/create_seminar")):
+        caption_parts = message.caption.split()
+        if len(caption_parts) > 1:
+            args_str = message.caption.replace(caption_parts[0], "", 1).strip()
+            
+    if not args_str:
+        await message.reply_text(
+            "🎓 **AI Seminar Presentation & Report Creator**\n\n"
+            "Usage:\n"
+            "• `/seminar Quantum Computing`\n"
+            "• `/seminar Blockchain Technology in Finance`\n"
+            "• `/seminar Deep Learning for Medical Diagnostics`",
+            parse_mode="Markdown"
+        )
+        return
+        
+    clear_session(chat_id, user_id)
+    session = get_session(chat_id, user_id)
+    session["seminar_topic"] = args_str
+    session["action"] = "seminar_creator"
+    
+    keyboard = InlineKeyboardMarkup([
+        [
+            InlineKeyboardButton("🌑 Tech Dark", callback_data="theme:dark"),
+            InlineKeyboardButton("Clean Minimalist ⚪", callback_data="theme:clean"),
+        ],
+        [
+            InlineKeyboardButton("🔵 Corporate Blue", callback_data="theme:corporate"),
+            InlineKeyboardButton("Creative Warm 🍊", callback_data="theme:warm"),
+        ],
+        [
+            InlineKeyboardButton("❌ Cancel", callback_data="btn:cancel")
+        ]
+    ])
+    await message.reply_text(
+        f"🎓 **Seminar Topic**: `{args_str}`\n\n"
+        "Please choose a design theme for your presentation slides and report:",
+        reply_markup=keyboard,
+        parse_mode="Markdown"
+    )
+
+async def execute_seminar_generation(query_or_msg, session, chat_id, user_id, context):
+    def get_notify():
+        async def notify(text):
+            try:
+                if hasattr(query_or_msg, "edit_message_text"):
+                    await query_or_msg.edit_message_text(text, parse_mode="Markdown")
+                else:
+                    await query_or_msg.reply_text(text, parse_mode="Markdown")
+            except Exception:
+                pass
+        return notify
+        
+    notify = get_notify()
+    
+    topic = session.get("seminar_topic")
+    theme = session.get("selected_theme", "clean")
+    
+    load_dotenv(os.path.join(os.path.dirname(__file__), ".env"), override=True)
+    if not GEMINI_API_KEY:
+        await notify("⚠️ **Gemini API Key is not configured!**")
+        clear_session(chat_id, user_id)
+        return
+        
+    try:
+        import json
+        import google.generativeai as genai
+        
+        await notify(f"⏳ **Generating Seminar Content**...\n"
+                     f"Connecting to Gemini AI for topic: `{topic}`")
+                     
+        genai.configure(api_key=GEMINI_API_KEY)
+        model = genai.GenerativeModel(GEMINI_MODEL)
+        
+        prompt = (
+            f"You are an academic expert. Generate a comprehensive seminar presentation outline and detailed research report content on the topic: '{topic}'.\n"
+            f"You must return ONLY a valid JSON object matching the following structure. Do not wrap it in markdown code blocks like ```json:\n"
+            "{\n"
+            "  \"title\": \"Direct Topic Title\",\n"
+            "  \"slides\": [\n"
+            "    {\n"
+            "      \"title\": \"Slide Title (e.g. Introduction to ...)\",\n"
+            "      \"bullets\": [\"Bullet point 1\", \"Bullet point 2\", \"Bullet point 3\"],\n"
+            "      \"notes\": \"Detailed speaker notes script for this slide to read aloud.\"\n"
+            "    }\n"
+            "  ],\n"
+            "  \"report\": [\n"
+            "    {\n"
+            "      \"heading\": \"Abstract\",\n"
+            "      \"content\": \"Abstract text summarizing the seminar.\"\n"
+            "    },\n"
+            "    {\n"
+            "      \"heading\": \"1. Introduction\",\n"
+            "      \"content\": \"Introduction content paragraphs.\"\n"
+            "    }\n"
+            "  ]\n"
+            "}\n"
+            "Make sure you generate at least 6 content slides and at least 5 detailed report sections (Abstract, Introduction, Technical Architecture/Core Details, Applications/Use-cases, Conclusion)."
+        )
+        
+        response = model.generate_content(prompt)
+        response_text = response.text.strip()
+        
+        # Clean JSON if wrapped
+        if response_text.startswith("```"):
+            lines = response_text.split("\n")
+            if lines[0].startswith("```"):
+                lines = lines[1:]
+            if lines[-1].startswith("```"):
+                lines = lines[:-1]
+            response_text = "\n".join(lines).strip()
+            
+        try:
+            data = json.loads(response_text)
+        except Exception as json_err:
+            logger.error(f"JSON parse error: {json_err}, raw text: {response_text}")
+            await notify("❌ Error: Failed to parse generated content into JSON. Retrying with a simplified prompt...")
+            # Retry once with simplified prompt
+            response = model.generate_content("Generate simple valid JSON outlining 5 slides for: " + topic + ". Same schema.")
+            response_text = response.text.strip()
+            if response_text.startswith("```"):
+                lines = response_text.split("\n")
+                if lines[0].startswith("```"):
+                    lines = lines[1:]
+                if lines[-1].startswith("```"):
+                    lines = lines[:-1]
+                response_text = "\n".join(lines).strip()
+            data = json.loads(response_text)
+            
+        title = data.get("title", topic)
+        slides_list = data.get("slides", [])
+        report_list = data.get("report", [])
+        
+        await notify("🛠️ Generating PowerPoint presentation slides and Word report files...")
+        
+        temp_dir = tempfile.mkdtemp()
+        ppt_filename = f"presentation_{topic.lower().replace(' ', '_')}.pptx"
+        doc_filename = f"report_{topic.lower().replace(' ', '_')}.docx"
+        
+        ppt_path = os.path.join(temp_dir, ppt_filename)
+        doc_path = os.path.join(temp_dir, doc_filename)
+        
+        from seminar_utils import create_seminar_presentation, create_seminar_report
+        
+        create_seminar_presentation(ppt_path, title, slides_list, theme)
+        create_seminar_report(doc_path, title, report_list, theme)
+        
+        await notify("📤 Uploading files to Telegram...")
+        
+        # Send PPTX
+        with open(ppt_path, "rb") as f_ppt:
+            await context.bot.send_document(
+                chat_id, 
+                f_ppt, 
+                filename=ppt_filename,
+                caption=f"📊 **Presentation Slides** (`.pptx`)\nTheme: `{theme.upper()}`\nTopic: `{title}`",
+                parse_mode="Markdown"
+            )
+            
+        # Send DOCX
+        with open(doc_path, "rb") as f_doc:
+            await context.bot.send_document(
+                chat_id, 
+                f_doc, 
+                filename=doc_filename,
+                caption=f"📝 **Detailed Seminar Report** (`.docx`)\nTopic: `{title}`",
+                parse_mode="Markdown"
+            )
+            
+        if hasattr(query_or_msg, "delete"):
+            try:
+                await query_or_msg.delete()
+            except Exception:
+                pass
+                
+        shutil.rmtree(temp_dir, ignore_errors=True)
+        clear_session(chat_id, user_id)
+        
+    except Exception as e:
+        logger.error(f"Seminar creation error: {e}", exc_info=True)
+        await notify(f"❌ Error generating seminar: {str(e)}")
+        clear_session(chat_id, user_id)
+
 async def start_action_command(update: Update, context: ContextTypes.DEFAULT_TYPE, action: str):
     chat_id = update.effective_chat.id
     user_id = update.effective_user.id
@@ -984,6 +1174,21 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         session["selected_style"] = selected_style
         await query.edit_message_text(f"⏳ Generating stylized avatar in `{selected_style}` style...")
         await execute_avatar_stylize(query, session, chat_id, user_id, context)
+        
+    elif data.startswith("theme:"):
+        selected_theme = data.split(":")[1]
+        session = get_session(chat_id, user_id)
+        session["selected_theme"] = selected_theme
+        topic = session.get("seminar_topic")
+        if not topic:
+            await query.edit_message_text("❌ Error: Seminar topic not found in session.")
+            clear_session(chat_id, user_id)
+            return
+        await query.edit_message_text(
+            f"⏳ **Selected Theme**: `{selected_theme.upper()}`\n"
+            f"🚀 Generating seminar outline and detailed content for `{topic}` using Gemini AI..."
+        )
+        await execute_seminar_generation(query, session, chat_id, user_id, context)
         
     # 5. Layout Setup Callbacks
     elif data.startswith("layout:"):
@@ -2513,6 +2718,7 @@ async def post_init(application):
         BotCommand("remove_watermark", "Search and remove specific text watermark from PDF"),
         BotCommand("avatar", "Stylize a face portrait into Claymation, Pixel Art, 3D, etc."),
         BotCommand("music", "Generate 10s custom AI lofi/music beats from text prompt"),
+        BotCommand("seminar", "Create full Seminar PowerPoint slides & Word Report from topic"),
     ]
     await application.bot.set_my_commands(commands)
 
@@ -2539,6 +2745,8 @@ def main():
     app.add_handler(CommandHandler("stylize", stylize_command))
     app.add_handler(CommandHandler("music", music_command))
     app.add_handler(CommandHandler("generate_music", music_command))
+    app.add_handler(CommandHandler("seminar", seminar_command))
+    app.add_handler(CommandHandler("create_seminar", seminar_command))
     
     # Generic action commands registration
     async def cmd_merge(u, c): await start_action_command(u, c, "merge")
