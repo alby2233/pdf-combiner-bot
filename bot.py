@@ -2,7 +2,7 @@ import os
 import shutil
 import tempfile
 import logging
-from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup, BotCommand
 from telegram.ext import (
     ApplicationBuilder,
     CommandHandler,
@@ -23,6 +23,7 @@ from pdf_utils import (
     merge_pdfs, split_pdf, rotate_pdf,
     ppt_to_images, pdf_to_images, images_to_pdf
 )
+from image_utils import rotate_image, resize_image, compress_image, convert_image_format, grayscale_image
 
 # Enable logging
 logging.basicConfig(
@@ -48,6 +49,8 @@ def get_session(chat_id, user_id):
     key = (chat_id, user_id)
     if key not in USER_SESSIONS:
         USER_SESSIONS[key] = {
+            "chat_id": chat_id,
+            "user_id": user_id,
             "action": None,          # Current running action (e.g., 'merge', 'word2pdf')
             "files": [],             # List of absolute downloaded file paths
             "temp_dir": None,        # Path to session's temp folder
@@ -84,10 +87,31 @@ def get_main_keyboard():
             InlineKeyboardButton("🔄 Office Conversions", callback_data="menu:office"),
         ],
         [
+            InlineKeyboardButton("🖼️ Image Utilities", callback_data="menu:image_utils"),
             InlineKeyboardButton("❌ Cancel Operation", callback_data="btn:cancel")
         ]
     ]
     return InlineKeyboardMarkup(keyboard)
+
+def get_image_keyboard():
+    keyboard = [
+        [
+            InlineKeyboardButton("🔄 Rotate Image", callback_data="action:img_rotate"),
+            InlineKeyboardButton("📐 Resize Image", callback_data="action:img_resize"),
+        ],
+        [
+            InlineKeyboardButton("📉 Compress Image", callback_data="action:img_compress"),
+            InlineKeyboardButton("🔄 Convert Format", callback_data="action:img_convert"),
+        ],
+        [
+            InlineKeyboardButton("🎨 Grayscale Filter", callback_data="action:img_grayscale"),
+        ],
+        [
+            InlineKeyboardButton("« Back to Main Menu", callback_data="menu:main")
+        ]
+    ]
+    return InlineKeyboardMarkup(keyboard)
+
 
 
 def get_pdf_keyboard():
@@ -150,11 +174,33 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     help_text = (
         "💡 **PDF & Office Bot Help**\n\n"
-        "• Use `/start` to open the main dashboard.\n"
-        "• Use `/cancel` at any time to abort the current operation.\n\n"
-        "👥 **Group Chat Usage**:\n"
-        "To use this bot in groups, simply call it using commands (e.g. `/merge`, `/word2pdf`, `/start`) or mention the bot. "
-        "The bot will ignore files uploaded by other group members unless they have initialized a command session, preventing spam."
+        "Here are all the direct commands you can run:\n\n"
+        "📂 **PDF Utilities**:\n"
+        "• `/merge` - Combine multiple PDF files into one\n"
+        "• `/split` - Extract specific page ranges from a PDF\n"
+        "• `/rotate` - Rotate pages of a PDF document\n"
+        "• `/layout` - Add custom Header, Footer, and Page Numbers\n\n"
+        "🔄 **Office Conversions (Watermark-Free)**:\n"
+        "• `/word_to_pdf` - Convert Word to PDF\n"
+        "• `/pdf_to_word` - Convert PDF to Word\n"
+        "• `/ppt_to_pdf` - Convert PowerPoint to PDF\n"
+        "• `/pdf_to_ppt` - Convert PDF to PowerPoint\n"
+        "• `/excel_to_pdf` - Convert Excel to PDF\n"
+        "• `/pdf_to_excel` - Convert PDF to Excel\n\n"
+        "🖼️ **Image Utilities**:\n"
+        "• `/images_to_pdf` - Combine photos into a single PDF\n"
+        "• `/pdf_to_images` - Export PDF pages as a ZIP of images\n"
+        "• `/ppt_to_images` - Export PPT slides as a ZIP of images\n"
+        "• `/img_rotate` - Rotate a photo clockwise (90, 180, 270)\n"
+        "• `/img_resize` - Scale a photo or set custom width\n"
+        "• `/img_compress` - Reduce file size of a photo\n"
+        "• `/img_convert` - Convert format (JPG ➔ PNG / PNG ➔ JPG)\n"
+        "• `/img_grayscale` - Apply a black & white filter to a photo\n\n"
+        "🤖 **Google Gemini AI**:\n"
+        "• Direct DM: Send any text message to chat directly.\n"
+        "• Group Chats: Mention the bot (e.g. `@pptpdf_bot question`) or reply to any bot message.\n\n"
+        "❌ **Control**:\n"
+        "• Use `/cancel` at any time to abort the current operation."
     )
     await update.message.reply_text(help_text, parse_mode="Markdown")
 
@@ -189,6 +235,11 @@ async def start_action_command(update: Update, context: ContextTypes.DEFAULT_TYP
         "ppt2images": "🖼️ **PPT ➔ Images**\nPlease upload your PowerPoint presentation.",
         "pdf2images": "🖼️ **PDF ➔ Images**\nPlease upload your PDF document.",
         "images2pdf": "➕ **Images ➔ PDF**\nPlease upload **one or more images** (JPG/PNG). Once you have uploaded all images, click the **Convert Now** button below.",
+        "img_rotate": "🔄 **Rotate Image**\nPlease upload the photo you want to rotate (JPG or PNG).",
+        "img_resize": "📐 **Resize Image**\nPlease upload the photo you want to resize (JPG or PNG).",
+        "img_compress": "📉 **Compress Image**\nPlease upload the photo you want to compress (JPG or PNG).",
+        "img_convert": "🔄 **Convert Format**\nPlease upload the photo you want to convert (JPG or PNG).",
+        "img_grayscale": "🎨 **Grayscale Filter**\nPlease upload the photo you want to apply grayscale to (JPG or PNG).",
     }
     
     prompt = prompt_texts.get(action, "Please upload your document.")
@@ -232,6 +283,8 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await query.edit_message_text("📂 **PDF Utilities**:\nSelect an operation:", reply_markup=get_pdf_keyboard(), parse_mode="Markdown")
         elif menu_name == "office":
             await query.edit_message_text("🔄 **Office Conversions**:\nSelect an operation:", reply_markup=get_office_keyboard(), parse_mode="Markdown")
+        elif menu_name == "image_utils":
+            await query.edit_message_text("🖼️ **Image Utilities**:\nSelect an operation:", reply_markup=get_image_keyboard(), parse_mode="Markdown")
             
     # 2. Cancel Button
     elif data == "btn:cancel":
@@ -260,6 +313,11 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "ppt2images": "🖼️ **PPT ➔ Images**\nPlease upload your PowerPoint presentation.",
             "pdf2images": "🖼️ **PDF ➔ Images**\nPlease upload your PDF document.",
             "images2pdf": "➕ **Images ➔ PDF**\nPlease upload **one or more images** (JPG/PNG). Once you have uploaded all images, click the **Convert Now** button below.",
+            "img_rotate": "🔄 **Rotate Image**\nPlease upload the photo you want to rotate (JPG or PNG).",
+            "img_resize": "📐 **Resize Image**\nPlease upload the photo you want to resize (JPG or PNG).",
+            "img_compress": "📉 **Compress Image**\nPlease upload the photo you want to compress (JPG or PNG).",
+            "img_convert": "🔄 **Convert Format**\nPlease upload the photo you want to convert (JPG or PNG).",
+            "img_grayscale": "🎨 **Grayscale Filter**\nPlease upload the photo you want to apply grayscale to (JPG or PNG).",
         }
         
         prompt = prompt_texts.get(action, "Please upload your document.")
@@ -334,6 +392,40 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         session["rotation_angle"] = angle
         await query.edit_message_text(f"⏳ Rotating PDF pages by {angle}°...")
         await execute_operation(query, session, chat_id, user_id, context)
+        
+    elif data.startswith("img_rotate_angle:"):
+        angle = int(data.split(":")[1])
+        session = get_session(chat_id, user_id)
+        session["img_rotate_angle"] = angle
+        await query.edit_message_text(f"⏳ Rotating photo by {angle}°...")
+        await execute_image_operation(query, session, context)
+        
+    elif data.startswith("img_resize_pct:"):
+        pct = int(data.split(":")[1])
+        session = get_session(chat_id, user_id)
+        session["img_resize_pct"] = pct
+        await query.edit_message_text(f"⏳ Resizing photo to {pct}%...")
+        await execute_image_operation(query, session, context)
+        
+    elif data.startswith("img_resize_width:"):
+        session = get_session(chat_id, user_id)
+        session["config_step"] = "ask_img_custom_width"
+        await query.edit_message_text("📐 Please type your **target width in pixels** (e.g. `800`):", parse_mode="Markdown")
+        
+    elif data.startswith("img_compress_level:"):
+        level = data.split(":")[1]
+        session = get_session(chat_id, user_id)
+        session["img_compress_level"] = level
+        await query.edit_message_text(f"⏳ Compressing photo with {level.upper()} quality...")
+        await execute_image_operation(query, session, context)
+        
+    elif data.startswith("img_convert_format:"):
+        fmt = data.split(":")[1]
+        session = get_session(chat_id, user_id)
+        session["img_convert_format"] = fmt
+        await query.edit_message_text(f"⏳ Converting photo format to {fmt.upper()}...")
+        await execute_image_operation(query, session, context)
+
 
 # --- Interactive Layout Config Flow ---
 
@@ -367,6 +459,151 @@ async def prompt_exclude_first_page(query, session, custom_layout=False):
         ]
     ]
     await query.edit_message_text(prompt, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="Markdown")
+
+# --- Interactive Image Config Flow ---
+
+async def proceed_image_setup(query_or_msg, session, context):
+    action = session["action"]
+    
+    # Check if we were passed a Message (e.g. from handle_photo / handle_document download)
+    is_query = hasattr(query_or_msg, "edit_message_text")
+    
+    async def send_prompt(text, markup=None):
+        if is_query:
+            await query_or_msg.edit_message_text(text, reply_markup=markup, parse_mode="Markdown")
+        else:
+            await query_or_msg.reply_text(text, reply_markup=markup, parse_mode="Markdown")
+
+    if action == "img_rotate":
+        keyboard = [
+            [
+                InlineKeyboardButton("Rotate 90° ➡️", callback_data="img_rotate_angle:90"),
+                InlineKeyboardButton("Rotate 180° 🔄", callback_data="img_rotate_angle:180"),
+            ],
+            [
+                InlineKeyboardButton("Rotate 270° ⬅️", callback_data="img_rotate_angle:270"),
+                InlineKeyboardButton("❌ Cancel", callback_data="btn:cancel"),
+            ]
+        ]
+        await send_prompt("🔄 **Rotation Configuration**\n\nChoose the rotation angle:", InlineKeyboardMarkup(keyboard))
+        
+    elif action == "img_resize":
+        keyboard = [
+            [
+                InlineKeyboardButton("75% Size", callback_data="img_resize_pct:75"),
+                InlineKeyboardButton("50% Size", callback_data="img_resize_pct:50"),
+            ],
+            [
+                InlineKeyboardButton("25% Size", callback_data="img_resize_pct:25"),
+                InlineKeyboardButton("Custom Width 📐", callback_data="img_resize_width:custom"),
+            ],
+            [
+                InlineKeyboardButton("❌ Cancel", callback_data="btn:cancel"),
+            ]
+        ]
+        await send_prompt("📐 **Resize Configuration**\n\nChoose a scale percentage or specify a custom width:", InlineKeyboardMarkup(keyboard))
+        
+    elif action == "img_compress":
+        keyboard = [
+            [
+                InlineKeyboardButton("Low (High Quality)", callback_data="img_compress_level:low"),
+            ],
+            [
+                InlineKeyboardButton("Medium", callback_data="img_compress_level:medium"),
+            ],
+            [
+                InlineKeyboardButton("High (Small File)", callback_data="img_compress_level:high"),
+            ],
+            [
+                InlineKeyboardButton("❌ Cancel", callback_data="btn:cancel"),
+            ]
+        ]
+        await send_prompt("📉 **Compression Configuration**\n\nChoose the compression level:", InlineKeyboardMarkup(keyboard))
+        
+    elif action == "img_convert":
+        keyboard = [
+            [
+                InlineKeyboardButton("Convert to JPG 🖼️", callback_data="img_convert_format:jpg"),
+                InlineKeyboardButton("Convert to PNG 🖼️", callback_data="img_convert_format:png"),
+            ],
+            [
+                InlineKeyboardButton("❌ Cancel", callback_data="btn:cancel"),
+            ]
+        ]
+        await send_prompt("🔄 **Format Configuration**\n\nChoose the target format to convert to:", InlineKeyboardMarkup(keyboard))
+        
+    elif action == "img_grayscale":
+        if is_query:
+            await query_or_msg.edit_message_text("⏳ Converting image to grayscale...")
+        else:
+            await query_or_msg.reply_text("⏳ Converting image to grayscale...")
+        await execute_image_operation(query_or_msg, session, context)
+
+async def execute_image_operation(query_or_msg, session, context):
+    chat_id = session.get("chat_id")
+    user_id = session.get("user_id")
+    is_query = hasattr(query_or_msg, "edit_message_text")
+    
+    async def notify(text):
+        if is_query:
+            try:
+                await query_or_msg.edit_message_text(text)
+            except Exception:
+                await context.bot.send_message(chat_id, text)
+        else:
+            await query_or_msg.reply_text(text)
+            
+    try:
+        if not session["files"]:
+            await notify("⚠️ No source image found. Please restart the operation.")
+            return
+            
+        src_path = session["files"][0]
+        src_filename = os.path.basename(src_path)
+        name, ext = os.path.splitext(src_filename)
+        action = session["action"]
+        
+        output_filename = f"edited_{src_filename}"
+        
+        def run_pil():
+            nonlocal output_filename
+            out_path = os.path.join(session["temp_dir"], output_filename)
+            if action == "img_rotate":
+                angle = session.get("img_rotate_angle", 90)
+                rotate_image(src_path, out_path, angle)
+            elif action == "img_resize":
+                pct = session.get("img_resize_pct")
+                custom_w = session.get("img_resize_width")
+                resize_image(src_path, out_path, scale_percent=pct, custom_width=custom_w)
+            elif action == "img_compress":
+                level = session.get("img_compress_level", "medium")
+                output_filename = f"compressed_{name}.jpg"
+                out_path = os.path.join(session["temp_dir"], output_filename)
+                compress_image(src_path, out_path, level)
+            elif action == "img_convert":
+                fmt = session.get("img_convert_format", "jpg")
+                target_ext = f".{fmt.lower()}"
+                output_filename = f"converted_{name}{target_ext}"
+                out_path = os.path.join(session["temp_dir"], output_filename)
+                convert_image_format(src_path, out_path)
+            elif action == "img_grayscale":
+                grayscale_image(src_path, out_path)
+            return out_path
+            
+        import asyncio
+        loop = asyncio.get_running_loop()
+        await notify("⏳ Modifying image...")
+        output_path = await loop.run_in_executor(None, run_pil)
+        
+        await notify("📤 Sending processed image back to you...")
+        with open(output_path, "rb") as f:
+            await context.bot.send_document(chat_id, f, filename=output_filename, caption="✅ Image modified successfully without watermarks!")
+            
+    except Exception as e:
+        logger.error(f"Image modification error: {e}", exc_info=True)
+        await notify(f"❌ An error occurred during image modification: {str(e)}")
+    finally:
+        clear_session(chat_id, user_id)
 
 # --- File Message Handling ---
 
@@ -421,6 +658,14 @@ async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE):
             reply_markup=keyboard,
             parse_mode="Markdown"
         )
+        
+    elif action in ["img_rotate", "img_resize", "img_compress", "img_convert", "img_grayscale"]:
+        if file_ext not in [".jpg", ".jpeg", ".png"]:
+            await update.message.reply_text("⚠️ Invalid file type! Please upload a JPG or PNG image.")
+            session["files"].pop()
+            return
+        prompt_msg = await update.message.reply_text("⏳ Processing image upload...")
+        await proceed_image_setup(prompt_msg, session, context)
         
     elif action in ["word2pdf", "ppt2pdf", "excel2pdf"]:
         # Ensure correct file type uploaded
@@ -490,6 +735,23 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_text("Please open the dashboard first using /start to select an action.")
             return
             
+    if session["action"] in ["img_rotate", "img_resize", "img_compress", "img_convert", "img_grayscale"]:
+        if session["step"] != "waiting_for_files":
+            return
+        await update.message.reply_chat_action("upload_document")
+        try:
+            photo = update.message.photo[-1]
+            new_file = await context.bot.get_file(photo.file_id)
+            local_path = os.path.join(session["temp_dir"], f"source_{photo.file_id[-8:]}.jpg")
+            await new_file.download_to_drive(local_path)
+            session["files"].append(local_path)
+        except Exception as e:
+            logger.error(f"Image download error: {e}")
+            await update.message.reply_text("❌ Error downloading image.")
+            return
+        await proceed_image_setup(update.message, session, context)
+        return
+
     if session["action"] != "images2pdf" or session["step"] != "waiting_for_files":
         return
         
@@ -590,6 +852,21 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
         session["split_range"] = text
         await update.message.reply_text(f"⏳ Extracting page range `{text}`...", parse_mode="Markdown")
         await execute_operation(update.message, session, chat_id, user_id, context)
+        return
+
+    # 1.5 Check if waiting for Custom Image Width
+    if step == "ask_img_custom_width" and action == "img_resize":
+        try:
+            width = int(text)
+            if width <= 0:
+                raise ValueError
+            session["img_resize_width"] = width
+        except ValueError:
+            await update.message.reply_text("⚠️ Please enter a valid positive integer for the width!")
+            return
+            
+        await update.message.reply_text(f"⏳ Resizing photo to width {width}px...")
+        await execute_image_operation(update.message, session, context)
         return
 
     # 2. Check if in Layout Settings Flow
@@ -802,8 +1079,34 @@ async def execute_operation(msg_or_query, session, chat_id, user_id, context):
 
 # --- Main Entry Point ---
 
+async def post_init(application):
+    commands = [
+        BotCommand("start", "Open the main dashboard menu"),
+        BotCommand("help", "Show help guide and group usage details"),
+        BotCommand("cancel", "Cancel current active operation"),
+        BotCommand("merge", "Merge multiple PDF files into one"),
+        BotCommand("split", "Extract pages from a PDF document"),
+        BotCommand("rotate", "Rotate pages of a PDF document"),
+        BotCommand("layout", "Add Header, Footer, and Page Numbers"),
+        BotCommand("word_to_pdf", "Convert Word document to PDF"),
+        BotCommand("pdf_to_word", "Convert PDF document to Word"),
+        BotCommand("ppt_to_pdf", "Convert PowerPoint to PDF"),
+        BotCommand("pdf_to_ppt", "Convert PDF document to PowerPoint"),
+        BotCommand("excel_to_pdf", "Convert Excel spreadsheet to PDF"),
+        BotCommand("pdf_to_excel", "Convert PDF document to Excel"),
+        BotCommand("ppt_to_images", "Convert PPT slides to ZIP images"),
+        BotCommand("pdf_to_images", "Convert PDF pages to ZIP images"),
+        BotCommand("images_to_pdf", "Combine multiple images into a PDF"),
+        BotCommand("img_rotate", "Rotate an image (90, 180, 270)"),
+        BotCommand("img_resize", "Resize image dimensions"),
+        BotCommand("img_compress", "Compress image file size"),
+        BotCommand("img_convert", "Convert format (JPG/PNG)"),
+        BotCommand("img_grayscale", "Convert image to grayscale"),
+    ]
+    await application.bot.set_my_commands(commands)
+
 def main():
-    builder = ApplicationBuilder().token(BOT_TOKEN)
+    builder = ApplicationBuilder().token(BOT_TOKEN).post_init(post_init)
     if PROXY_URL:
         builder.proxy(PROXY_URL)
     app = builder.build()
@@ -827,6 +1130,11 @@ def main():
     async def cmd_ppt2images(u, c): await start_action_command(u, c, "ppt2images")
     async def cmd_pdf2images(u, c): await start_action_command(u, c, "pdf2images")
     async def cmd_images2pdf(u, c): await start_action_command(u, c, "images2pdf")
+    async def cmd_img_rotate(u, c): await start_action_command(u, c, "img_rotate")
+    async def cmd_img_resize(u, c): await start_action_command(u, c, "img_resize")
+    async def cmd_img_compress(u, c): await start_action_command(u, c, "img_compress")
+    async def cmd_img_convert(u, c): await start_action_command(u, c, "img_convert")
+    async def cmd_img_grayscale(u, c): await start_action_command(u, c, "img_grayscale")
 
     app.add_handler(CommandHandler("merge", cmd_merge))
     app.add_handler(CommandHandler("split", cmd_split))
@@ -856,6 +1164,12 @@ def main():
     
     app.add_handler(CommandHandler("images2pdf", cmd_images2pdf))
     app.add_handler(CommandHandler("images_to_pdf", cmd_images2pdf))
+    
+    app.add_handler(CommandHandler("img_rotate", cmd_img_rotate))
+    app.add_handler(CommandHandler("img_resize", cmd_img_resize))
+    app.add_handler(CommandHandler("img_compress", cmd_img_compress))
+    app.add_handler(CommandHandler("img_convert", cmd_img_convert))
+    app.add_handler(CommandHandler("img_grayscale", cmd_img_grayscale))
     
     # Register callback query handler for menus and inline buttons
     app.add_handler(CallbackQueryHandler(handle_callback))
