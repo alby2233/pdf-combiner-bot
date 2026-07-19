@@ -2037,45 +2037,31 @@ def is_doc_image(doc):
 
 async def start_replicate_from_photo_or_doc(update, context, file_id, file_name_hint, prompt):
     chat_id = update.effective_chat.id
-    msg = await update.message.reply_text("⏳ Downloading image for AI editing...")
+    update_msg = await update.message.reply_text("⏳ Downloading image for AI editing...")
     
     try:
-        new_file = await context.bot.get_file(file_id)
-        temp_dir = tempfile.mkdtemp()
-        local_path = os.path.join(temp_dir, f"source_{file_name_hint}")
-        await new_file.download_to_drive(local_path)
+        load_dotenv(os.path.join(os.path.dirname(__file__), ".env"), override=True)
+        token = os.getenv("REPLICATE_API_TOKEN", "").strip()
+        if not token:
+            await pollinations_image_fallback(chat_id, prompt, update_msg, context)
+            return
+            
+        await update_msg.edit_text("⏳ Processing image request...")
         
-        await edit_image_with_replicate(chat_id, local_path, prompt, msg, context)
-        shutil.rmtree(temp_dir, ignore_errors=True)
-    except Exception as e:
-        logger.error(f"start_replicate_from_photo_or_doc error: {e}", exc_info=True)
-        await msg.edit_text(f"❌ Error downloading image: {e}")
-
-async def edit_image_with_replicate(chat_id, src_path, prompt, update_msg, context):
-    load_dotenv(os.path.join(os.path.dirname(__file__), ".env"), override=True)
-    token = os.getenv("REPLICATE_API_TOKEN", "").strip()
-    if not token:
-        await update_msg.edit_text(
-            "⚠️ **Replicate API Token is not configured!**\n\n"
-            "To use conversational image editing via prompts, please obtain a free/cheap API token from [Replicate](https://replicate.com) and add it to your `.env` file:\n"
-            "`REPLICATE_API_TOKEN=r8_your_token_here`"
-        )
-        return
-
-    await update_msg.edit_text("⏳ Preparing image for AI processing...")
-    
-    try:
         import base64
         import httpx
         import asyncio
         
-        # Convert local image to base64 Data URI
-        with open(src_path, "rb") as f:
-            encoded_data = base64.b64encode(f.read()).decode("utf-8")
+        new_file = await context.bot.get_file(file_id)
+        temp_dir = tempfile.mkdtemp()
+        local_path = os.path.join(temp_dir, file_name_hint)
+        await new_file.download_to_drive(local_path)
         
-        file_ext = os.path.splitext(src_path)[1].lower()
-        mime_type = "image/png" if file_ext == ".png" else "image/jpeg"
-        data_uri = f"data:{mime_type};base64,{encoded_data}"
+        with open(local_path, "rb") as f:
+            encoded_data = base64.b64encode(f.read()).decode("utf-8")
+        ext = os.path.splitext(file_name_hint)[1].lower().replace(".", "")
+        mime = "jpeg" if ext in ["jpg", "jpeg"] else ext
+        data_uri = f"data:image/{mime};base64,{encoded_data}"
         
         headers = {
             "Authorization": f"Bearer {token}",
@@ -2102,7 +2088,7 @@ async def edit_image_with_replicate(chat_id, src_path, prompt, update_msg, conte
                 }
             }
             
-        await update_msg.edit_text("🚀 Sending request to Replicate AI...")
+        await update_msg.edit_text("🚀 Sending request to AI Engine...")
         
         async with httpx.AsyncClient(timeout=60.0) as client:
             res = await client.post(
@@ -2111,8 +2097,8 @@ async def edit_image_with_replicate(chat_id, src_path, prompt, update_msg, conte
                 headers=headers
             )
             if res.status_code != 201:
-                error_detail = res.json().get("detail", res.text)
-                await update_msg.edit_text(f"❌ Replicate API Error: {error_detail}")
+                logger.warning(f"Replicate API status {res.status_code}, switching to Pollinations.ai fallback")
+                await pollinations_image_fallback(chat_id, prompt, update_msg, context)
                 return
                 
             prediction = res.json()
