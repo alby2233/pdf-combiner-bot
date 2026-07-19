@@ -1120,37 +1120,25 @@ async def stylize_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         parse_mode="Markdown"
     )
 
-async def webapp_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
-    chat_id = update.effective_chat.id
-    message = update.message
-    
-    args_str = " ".join(context.args) if context.args else ""
-    if not args_str and message.reply_to_message and message.reply_to_message.text:
-        args_str = message.reply_to_message.text
-        
-    if not args_str:
-        await message.reply_text(
-            "⚡ **Antigravity AI Web Page Creator Usage**:\n\n"
-            "• `/website A futuristic dark-mode portfolio for a web developer`\n"
-            "• `/webapp Interactive Pomodoro study timer with sound effects`\n"
-            "• `/website Modern SaaS product landing page with pricing cards`\n\n"
-            "The bot will design a complete, self-contained, interactive HTML5/CSS3/JS web page and send you the `.html` file & `.zip` package!",
-            parse_mode="Markdown"
-        )
-        return
-        
+async def execute_webapp_generation(query_or_msg, prompt_desc, chat_id, context):
     if not GEMINI_API_KEY:
-        await message.reply_text("⚠️ Google Gemini AI is not configured.")
+        if hasattr(query_or_msg, "edit_message_text"):
+            await query_or_msg.edit_message_text("⚠️ Google Gemini AI is not configured.")
+        else:
+            await query_or_msg.reply_text("⚠️ Google Gemini AI is not configured.")
         return
-        
-    status_msg = await message.reply_text("⚡ **Antigravity AI**: Designing layout, styling CSS, and coding JavaScript logic...")
-    await message.reply_chat_action("typing")
-    
+
+    if hasattr(query_or_msg, "edit_message_text"):
+        status_msg = query_or_msg
+        await status_msg.edit_message_text("⚡ **Antigravity AI**: Designing layout, styling CSS, and coding JavaScript logic...")
+    else:
+        status_msg = await query_or_msg.reply_text("⚡ **Antigravity AI**: Designing layout, styling CSS, and coding JavaScript logic...")
+
     try:
         import asyncio
         import zipfile
         import re
-        
+
         system_prompt = (
             "You are Antigravity, a world-class AI Web Developer. "
             "Generate a complete, production-grade, self-contained single-file HTML web application based on the user prompt.\n\n"
@@ -1161,17 +1149,17 @@ async def webapp_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "4. NO PLACEHOLDERS: Create complete text content, features, and realistic UI elements.\n"
             "5. OUTPUT FORMAT: Return ONLY the code inside ```html ... ``` block. Do not include markdown chatter outside the code block."
         )
-        
-        full_user_prompt = f"{system_prompt}\n\nUSER REQUEST: {args_str}"
-        
+
+        full_user_prompt = f"{system_prompt}\n\nUSER REQUEST: {prompt_desc}"
+
         model = genai.GenerativeModel(GEMINI_MODEL)
         loop = asyncio.get_running_loop()
         response = await loop.run_in_executor(
             None, lambda: model.generate_content(full_user_prompt)
         )
-        
+
         raw_text = response.text if hasattr(response, "text") else ""
-        
+
         html_code = ""
         match = re.search(r"```html\s*(.*?)\s*```", raw_text, re.DOTALL | re.IGNORECASE)
         if match:
@@ -1180,20 +1168,21 @@ async def webapp_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             html_code = raw_text.strip()
         else:
             html_code = f"<!DOCTYPE html>\n<html>\n<head><title>Web Page</title></head>\n<body>{raw_text}</body>\n</html>"
-            
+
         temp_dir = tempfile.mkdtemp()
         html_filename = "index.html"
         html_path = os.path.join(temp_dir, html_filename)
         with open(html_path, "w", encoding="utf-8") as f:
             f.write(html_code)
-            
+
         zip_filename = "web_application.zip"
         zip_path = os.path.join(temp_dir, zip_filename)
         with zipfile.ZipFile(zip_path, "w", zipfile.ZIP_DEFLATED) as zipf:
             zipf.write(html_path, arcname="index.html")
-            
-        await status_msg.edit_text("📤 Uploading web application files to Telegram...")
-        
+
+        if hasattr(query_or_msg, "edit_message_text"):
+            await query_or_msg.edit_message_text("📤 Uploading web application files to Telegram...")
+
         with open(html_path, "rb") as f_html:
             await context.bot.send_document(
                 chat_id,
@@ -1201,12 +1190,12 @@ async def webapp_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 filename="index.html",
                 caption=(
                     f"✨ **Antigravity AI Web Page Created!**\n\n"
-                    f"🎯 **Topic**: \"_{args_str[:60]}..._\"\n"
+                    f"🎯 **Template**: \"_{prompt_desc[:60]}..._\"\n"
                     "📄 `index.html` (Double-click to open in any browser!)"
                 ),
                 parse_mode="Markdown"
             )
-            
+
         with open(zip_path, "rb") as f_zip:
             await context.bot.send_document(
                 chat_id,
@@ -1215,13 +1204,42 @@ async def webapp_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 caption="📦 **Complete Web Application ZIP Archive**",
                 parse_mode="Markdown"
             )
-            
-        await status_msg.delete()
+
+        if hasattr(query_or_msg, "delete"):
+            await query_or_msg.delete()
         shutil.rmtree(temp_dir, ignore_errors=True)
-        
+
     except Exception as e:
         logger.error(f"Antigravity Web Page error: {e}", exc_info=True)
-        await status_msg.edit_text(f"❌ Error generating web page: {str(e)}")
+        if hasattr(query_or_msg, "edit_message_text"):
+            await query_or_msg.edit_message_text(f"❌ Error generating web page: {str(e)}")
+        else:
+            await query_or_msg.reply_text(f"❌ Error generating web page: {str(e)}")
+
+async def webapp_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    chat_id = update.effective_chat.id
+    message = update.message
+    
+    args_str = " ".join(context.args) if context.args else ""
+    if not args_str and message.reply_to_message and message.reply_to_message.text:
+        args_str = message.reply_to_message.text
+        
+    if args_str:
+        await execute_webapp_generation(message, args_str, chat_id, context)
+        return
+
+    keyboard = [
+        [InlineKeyboardButton("💻 Dev Portfolio", callback_data="webpreset:Developer Portfolio with Dark Mode & Glassmorphism"), InlineKeyboardButton("🚀 SaaS Landing Page", callback_data="webpreset:Modern SaaS Landing Page with Pricing Cards")],
+        [InlineKeyboardButton("⏱️ Study / Pomodoro Timer", callback_data="webpreset:Interactive Pomodoro Study Timer App"), InlineKeyboardButton("🎵 Lofi Audio Player", callback_data="webpreset:Futuristic Lofi Music Player with Visualizer Controls")],
+        [InlineKeyboardButton("📊 Business Showcase", callback_data="webpreset:Corporate Business Showcase Landing Page with Contact Form"), InlineKeyboardButton("🧮 Interactive Calculator", callback_data="webpreset:Smart Unit & Currency Converter Calculator App")],
+    ]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+    await message.reply_text(
+        "⚡ **Antigravity AI Web Creator**\n\n"
+        "Click a ready-made template below to generate your web app instantly, or type a topic (e.g. `/website fitness tracker`):",
+        reply_markup=reply_markup,
+        parse_mode="Markdown"
+    )
 
 async def seminar_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.effective_chat.id
@@ -1618,6 +1636,10 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             f"🚀 Generating seminar outline and detailed content for `{topic}` using Gemini AI..."
         )
         await execute_seminar_generation(query, session, chat_id, user_id, context)
+        
+    elif data.startswith("webpreset:"):
+        preset_prompt = data.split("webpreset:")[1]
+        await execute_webapp_generation(query, preset_prompt, chat_id, context)
         
     # 5. Layout Setup Callbacks
     elif data.startswith("layout:"):
