@@ -32,7 +32,7 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 # Load environment variables
-load_dotenv()
+load_dotenv(os.path.join(os.path.dirname(__file__), ".env"))
 BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 PROXY_URL = os.getenv("PROXY_URL")
@@ -720,7 +720,7 @@ async def start_replicate_from_photo_or_doc(update, context, file_id, file_name_
         await msg.edit_text(f"❌ Error downloading image: {e}")
 
 async def edit_image_with_replicate(chat_id, src_path, prompt, update_msg, context):
-    load_dotenv(override=True)
+    load_dotenv(os.path.join(os.path.dirname(__file__), ".env"), override=True)
     token = os.getenv("REPLICATE_API_TOKEN", "").strip()
     if not token:
         await update_msg.edit_text(
@@ -840,7 +840,7 @@ async def edit_image_with_replicate(chat_id, src_path, prompt, update_msg, conte
         await update_msg.edit_text(f"❌ Error communicating with Replicate: {str(e)}")
 
 async def generate_image_with_replicate(chat_id, prompt, update_msg, context):
-    load_dotenv(override=True)
+    load_dotenv(os.path.join(os.path.dirname(__file__), ".env"), override=True)
     token = os.getenv("REPLICATE_API_TOKEN", "").strip()
     if not token:
         await update_msg.edit_text(
