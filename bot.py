@@ -135,7 +135,10 @@ def get_pdf_keyboard():
         ],
         [
             InlineKeyboardButton("📉 Compress PDF", callback_data="action:pdf_compress"),
+        ],
+        [
             InlineKeyboardButton("✍️ Watermark PDF", callback_data="action:pdf_watermark"),
+            InlineKeyboardButton("🧼 Remove Watermark", callback_data="action:pdf_rem_watermark"),
         ],
         [
             InlineKeyboardButton("🔒 Lock PDF", callback_data="action:pdf_encrypt"),
@@ -239,15 +242,20 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "• `/merge` - Combine multiple PDF files into one\n"
         "• `/split` - Extract specific page ranges from a PDF\n"
         "• `/rotate` - Rotate pages of a PDF document\n"
-        "• `/layout` - Add custom Header, Footer, and Page Numbers\n\n"
+        "• `/layout` - Add custom Header, Footer, and Page Numbers\n"
+        "• `/compress` - Compress PDF file size (Low/Medium/High)\n"
+        "• `/lock` - Password protect a PDF file\n"
+        "• `/unlock` - Remove password from a PDF\n"
+        "• `/watermark` - Add a transparent watermark to a PDF\n\n"
         "🔄 **Office Conversions (Watermark-Free)**:\n"
         "• `/word_to_pdf` - Convert Word to PDF\n"
         "• `/pdf_to_word` - Convert PDF to Word\n"
         "• `/ppt_to_pdf` - Convert PowerPoint to PDF\n"
         "• `/pdf_to_ppt` - Convert PDF to PowerPoint\n"
         "• `/excel_to_pdf` - Convert Excel to PDF\n"
-        "• `/pdf_to_excel` - Convert PDF to Excel\n\n"
-        "🖼️ **Image Utilities**:\n"
+        "• `/pdf_to_excel` - Convert PDF to Excel\n"
+        "• `/chart` - Generate Bar/Line/Pie charts from Excel/CSV\n\n"
+        "🖼️ **Image & GIF Utilities**:\n"
         "• `/images_to_pdf` - Combine photos into a single PDF\n"
         "• `/pdf_to_images` - Export PDF pages as a ZIP of images\n"
         "• `/ppt_to_images` - Export PPT slides as a ZIP of images\n"
@@ -255,11 +263,19 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "• `/img_resize` - Scale a photo or set custom width\n"
         "• `/img_compress` - Reduce file size of a photo\n"
         "• `/img_convert` - Convert format (JPG ➔ PNG / PNG ➔ JPG)\n"
-        "• `/img_grayscale` - Apply a black & white filter to a photo\n\n"
+        "• `/img_grayscale` - Apply a black & white filter to a photo\n"
+        "• `/video_to_gif` - Convert a video file into an animated GIF\n"
+        "• `/images_to_gif` - Combine multiple photos into a GIF\n"
+        "• `/ocr` - Extract text from a textbook page or image scan\n\n"
         "🎨 **AI Image Generation & Editing (Replicate)**:\n"
         "• `/generate <prompt>` - Generate a new image from scratch\n"
         "• `/set_model` - Select active generation/editing model dynamically\n"
-        "• **Prompt Editing**: Reply to any photo (or upload with caption) and mention the bot with an edit instruction (e.g. `@pptpdf_bot blur background`)\n\n"
+        "• **Prompt Editing**: Reply to any photo (or upload with caption) and mention the bot with an edit instruction (e.g. `@pptpdf_bot blur background`)\n"
+        "• `/meme Top Text | Bottom Text` - Overlay text on image to make a meme\n\n"
+        "🎲 **Group Games & Social Tools**:\n"
+        "• `/download <link>` - Download videos from YouTube, TikTok, Reels, etc.\n"
+        "• `/choose <options>` - Randomly pick an option from a list\n"
+        "• `/trivia` - Start a Gemini AI-powered quiz poll in the group\n\n"
         "🤖 **Google Gemini AI**:\n"
         "• Direct DM: Send any text message to chat directly.\n"
         "• Group Chats: Mention the bot (e.g. `@pptpdf_bot question`) or reply to any bot message.\n\n"
@@ -643,6 +659,7 @@ async def start_action_command(update: Update, context: ContextTypes.DEFAULT_TYP
         "pdf_encrypt": "🔒 **Lock PDF (Password Protect)**\nPlease upload the PDF document you want to lock with a password.",
         "pdf_decrypt": "🔓 **Unlock PDF (Remove Password)**\nPlease upload the locked PDF document.",
         "pdf_watermark": "✍️ **Watermark PDF**\nPlease upload the PDF document you want to add a watermark to.",
+        "pdf_rem_watermark": "🧼 **Remove PDF Watermark**\nPlease upload the PDF document you want to remove the text watermark from.",
         "excel_chart": "📊 **Excel/CSV Chart Generator**\nPlease upload the Excel sheet (`.xlsx`, `.xls`) or CSV file to plot.",
     }
     
@@ -733,6 +750,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
             "pdf_encrypt": "🔒 **Lock PDF (Password Protect)**\nPlease upload the PDF document you want to lock with a password.",
             "pdf_decrypt": "🔓 **Unlock PDF (Remove Password)**\nPlease upload the locked PDF document.",
             "pdf_watermark": "✍️ **Watermark PDF**\nPlease upload the PDF document you want to add a watermark to.",
+            "pdf_rem_watermark": "🧼 **Remove PDF Watermark**\nPlease upload the PDF document you want to remove the text watermark from.",
             "excel_chart": "📊 **Excel/CSV Chart Generator**\nPlease upload the Excel sheet (`.xlsx`, `.xls`) or CSV file to plot.",
         }
         
@@ -1523,7 +1541,7 @@ async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE):
             session["files"].pop()
             return
         
-    elif action in ["pdf2word", "pdf2ppt", "pdf2excel", "pdf2images", "layout_settings", "split", "rotate", "pdf_compress", "pdf_encrypt", "pdf_decrypt", "pdf_watermark"]:
+    elif action in ["pdf2word", "pdf2ppt", "pdf2excel", "pdf2images", "layout_settings", "split", "rotate", "pdf_compress", "pdf_encrypt", "pdf_decrypt", "pdf_watermark", "pdf_rem_watermark"]:
         if file_ext != ".pdf":
             await update.message.reply_text("⚠️ Invalid file type! Please upload a PDF file.")
             session["files"].pop()
@@ -1538,6 +1556,9 @@ async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE):
         elif action == "pdf_watermark":
             session["step"] = "waiting_for_watermark_text"
             await update.message.reply_text("✍️ **Please enter the text** for the diagonal watermark (e.g. `CONFIDENTIAL`, `DO NOT COPY`):")
+        elif action == "pdf_rem_watermark":
+            session["step"] = "waiting_for_remove_watermark_text"
+            await update.message.reply_text("🧼 **Please enter the exact text** of the watermark you want to search and remove:")
         elif action == "layout_settings":
             prompt_msg = await update.message.reply_text("⏳ Processing PDF file...")
             await start_layout_config_flow(prompt_msg, session)
@@ -1799,6 +1820,12 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
         await execute_operation(update.message, session, chat_id, user_id, context)
         return
 
+    if session["step"] == "waiting_for_remove_watermark_text" and action == "pdf_rem_watermark":
+        session["remove_watermark_text"] = text
+        await update.message.reply_text(f"⏳ Removing occurrences of watermark `{text}`...", parse_mode="Markdown")
+        await execute_operation(update.message, session, chat_id, user_id, context)
+        return
+
     # 1.5 Check if waiting for Custom Image Width
     if step == "ask_img_custom_width" and action == "img_resize":
         try:
@@ -1985,6 +2012,15 @@ async def execute_operation(msg_or_query, session, chat_id, user_id, context):
             from watermark_utils import add_pdf_watermark
             add_pdf_watermark(input_file, output_path, watermark_text)
             
+        elif action == "pdf_rem_watermark":
+            input_file = files[0]
+            watermark_text = session.get("remove_watermark_text")
+            output_filename = "cleared_" + os.path.basename(input_file)
+            output_path = os.path.join(temp_dir, output_filename)
+            await notify(f"⏳ Removing watermark `{watermark_text}`...")
+            from watermark_utils import remove_pdf_watermark
+            remove_pdf_watermark(input_file, output_path, watermark_text)
+            
         elif action == "excel_chart":
             input_file = files[0]
             chart_type = session.get("chart_type", "bar")
@@ -2151,6 +2187,7 @@ async def post_init(application):
         BotCommand("video_to_gif", "Convert a video clip into animated GIF"),
         BotCommand("images_to_gif", "Combine multiple images into animated GIF"),
         BotCommand("ocr", "Extract text from textbook pages / photos"),
+        BotCommand("remove_watermark", "Search and remove specific text watermark from PDF"),
     ]
     await application.bot.set_my_commands(commands)
 
@@ -2199,6 +2236,7 @@ def main():
     async def cmd_pdf_encrypt(u, c): await start_action_command(u, c, "pdf_encrypt")
     async def cmd_pdf_decrypt(u, c): await start_action_command(u, c, "pdf_decrypt")
     async def cmd_pdf_watermark(u, c): await start_action_command(u, c, "pdf_watermark")
+    async def cmd_pdf_rem_watermark(u, c): await start_action_command(u, c, "pdf_rem_watermark")
     async def cmd_excel_chart(u, c): await start_action_command(u, c, "excel_chart")
 
     app.add_handler(CommandHandler("merge", cmd_merge))
@@ -2218,6 +2256,8 @@ def main():
     app.add_handler(CommandHandler("unlock", cmd_pdf_decrypt))
     app.add_handler(CommandHandler("watermark_pdf", cmd_pdf_watermark))
     app.add_handler(CommandHandler("watermark", cmd_pdf_watermark))
+    app.add_handler(CommandHandler("remove_watermark", cmd_pdf_rem_watermark))
+    app.add_handler(CommandHandler("rem_watermark", cmd_pdf_rem_watermark))
     app.add_handler(CommandHandler("excel_chart", cmd_excel_chart))
     app.add_handler(CommandHandler("chart", cmd_excel_chart))
     

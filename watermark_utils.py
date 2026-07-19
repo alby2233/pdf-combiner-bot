@@ -49,3 +49,21 @@ def add_pdf_watermark(input_path, output_path, watermark_text):
                 os.remove(watermark_temp_path)
         except Exception:
             pass
+
+def remove_pdf_watermark(input_path, output_path, watermark_text):
+    doc = fitz.open(input_path)
+    if len(doc) == 0:
+        doc.close()
+        raise ValueError("The PDF document is empty.")
+        
+    for page in doc:
+        # Search for instances of the watermark text
+        text_instances = page.search_for(watermark_text)
+        for inst in text_instances:
+            # Apply redaction (white block cover-up)
+            page.add_redact_annot(inst, fill=(1, 1, 1))
+        if text_instances:
+            page.apply_redactions()
+            
+    doc.save(output_path)
+    doc.close()
