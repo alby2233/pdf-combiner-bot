@@ -311,7 +311,8 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "• `/choose <options>` - Randomly pick an option from a list (or pick active group member)\n"
         "• `/members` - View current pool of active group members\n"
         "• `/trivia` - Start a Gemini AI-powered quiz poll in the group\n\n"
-        "🤖 **Google Gemini AI**:\n"
+        "🤖 **Google Gemini & Antigravity AI**:\n"
+        "• `/code <snippet>` - Audit code, debug error stack traces & optimize logic\n"
         "• Direct DM: Send any text message to chat directly.\n"
         "• Group Chats: Mention the bot (e.g. @" + bot_username + " question) or reply to any bot message.\n\n"
         "❌ **Control**:\n"
@@ -1240,6 +1241,65 @@ async def webapp_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         reply_markup=reply_markup,
         parse_mode="Markdown"
     )
+
+async def code_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    chat_id = update.effective_chat.id
+    message = update.message
+    
+    args_str = " ".join(context.args) if context.args else ""
+    if not args_str and message.reply_to_message and message.reply_to_message.text:
+        args_str = message.reply_to_message.text
+        
+    if not args_str:
+        await message.reply_text(
+            "💻 **Antigravity AI Code Reviewer Usage**:\n\n"
+            "• `/code <paste code snippet or error trace>`\n"
+            "• Or reply to any code/error message with `/code`\n\n"
+            "Antigravity AI will analyze bugs, optimize logic, provide refactored code, and explain key improvements!",
+            parse_mode="Markdown"
+        )
+        return
+        
+    if not GEMINI_API_KEY:
+        await message.reply_text("⚠️ Google Gemini AI is not configured.")
+        return
+        
+    status_msg = await message.reply_text("💻 **Antigravity AI**: Analyzing code structure and auditing logic...")
+    await message.reply_chat_action("typing")
+    
+    try:
+        import asyncio
+        
+        system_prompt = (
+            "You are Antigravity, an expert Senior Software Engineer and Code Auditor. "
+            "Analyze the provided code snippet, error log, or architecture request.\n\n"
+            "STRUCTURE YOUR RESPONSE CLEARLY AS FOLLOWS:\n"
+            "1. 🔍 **Issue & Bug Diagnosis**: Briefly explain any syntax errors, logical bugs, performance bottlenecks, or security flaws.\n"
+            "2. 💡 **Fixed & Refactored Code**: Provide complete, production-ready, clean code inside Markdown code blocks (e.g. ```python ... ```).\n"
+            "3. 🚀 **Key Improvements**: Bullet points explaining why the fixes work and best practices applied."
+        )
+        
+        full_user_prompt = f"{system_prompt}\n\nCODE / ERROR TO AUDIT:\n{args_str}"
+        
+        model = genai.GenerativeModel(GEMINI_MODEL)
+        loop = asyncio.get_running_loop()
+        response = await loop.run_in_executor(
+            None, lambda: model.generate_content(full_user_prompt)
+        )
+        
+        res_text = response.text if hasattr(response, "text") else "No response generated."
+        
+        header = "💻 **Antigravity AI Code Audit & Review**:\n\n"
+        full_message = header + res_text
+        
+        try:
+            await status_msg.edit_text(full_message, parse_mode="Markdown")
+        except Exception:
+            await status_msg.edit_text(full_message)
+            
+    except Exception as e:
+        logger.error(f"Antigravity Code Auditor error: {e}", exc_info=True)
+        await status_msg.edit_text(f"❌ Error during code review: {str(e)}")
 
 async def seminar_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.effective_chat.id
@@ -3178,6 +3238,7 @@ async def post_init(application):
         BotCommand("music", "Generate 10s custom AI lofi/music beats from text prompt"),
         BotCommand("seminar", "Create full Seminar PowerPoint slides & Word Report from topic"),
         BotCommand("website", "Antigravity AI: Create interactive web page / HTML app from prompt"),
+        BotCommand("code", "Antigravity AI: Audit code, debug error traces & optimize performance"),
         BotCommand("upscale", "Upscale low-res photo to high-res 4K image"),
         BotCommand("tts", "Convert text to speech/voice note using Suno Bark"),
     ]
@@ -3212,6 +3273,8 @@ def main():
     app.add_handler(CommandHandler("create_seminar", seminar_command))
     app.add_handler(CommandHandler("website", webapp_command))
     app.add_handler(CommandHandler("webapp", webapp_command))
+    app.add_handler(CommandHandler("code", code_command))
+    app.add_handler(CommandHandler("debug", code_command))
     app.add_handler(CommandHandler("upscale", upscale_command))
     app.add_handler(CommandHandler("tts", tts_command))
     app.add_handler(CommandHandler("speak", tts_command))
