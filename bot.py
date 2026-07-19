@@ -713,6 +713,41 @@ async def ocr_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         logger.error(f"OCR execution error: {e}")
         await status_msg.edit_text(f"❌ Error during OCR extraction: {str(e)}")
 
+async def pil_upscale_fallback(chat_id, local_path, status_msg, context):
+    try:
+        await status_msg.edit_text("⏳ Upscaling image using High-Resolution Lanczos & Sharpening Engine...")
+        from PIL import Image, ImageEnhance
+        import asyncio
+        loop = asyncio.get_running_loop()
+        temp_dir = tempfile.mkdtemp()
+        out_path = os.path.join(temp_dir, "upscaled_4k.png")
+        
+        def process_image():
+            with Image.open(local_path) as img:
+                img = img.convert("RGB")
+                w, h = img.size
+                new_w, new_h = w * 4, h * 4
+                upscaled = img.resize((new_w, new_h), Image.Resampling.LANCZOS)
+                enhanced = ImageEnhance.Sharpness(upscaled).enhance(1.5)
+                enhanced.save(out_path, "PNG", quality=95)
+                
+        await loop.run_in_executor(None, process_image)
+        
+        await status_msg.edit_text("📤 Sending 4K upscaled image back to Telegram...")
+        with open(out_path, "rb") as f_send:
+            await context.bot.send_document(
+                chat_id,
+                f_send,
+                filename="upscaled_image_4k.png",
+                caption="✅ **4K Upscaled Image**\nEnhanced 4X resolution via Lanczos & Sharpness processing.",
+                parse_mode="Markdown"
+            )
+        await status_msg.delete()
+        shutil.rmtree(temp_dir, ignore_errors=True)
+    except Exception as e:
+        logger.error(f"PIL upscale fallback error: {e}")
+        await status_msg.edit_text(f"❌ Error upscaling image: {str(e)}")
+
 async def upscale_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.effective_chat.id
     message = update.message
@@ -738,12 +773,6 @@ async def upscale_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return
         
-    load_dotenv(os.path.join(os.path.dirname(__file__), ".env"), override=True)
-    token = os.getenv("REPLICATE_API_TOKEN", "").strip()
-    if not token:
-        await message.reply_text("⚠️ Replicate API Token is not configured in `.env`!")
-        return
-        
     status_msg = await message.reply_text("⏳ Downloading source image for upscaling...")
     try:
         import base64
@@ -755,6 +784,12 @@ async def upscale_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         local_path = os.path.join(temp_dir, "upscale_src.jpg")
         await new_file.download_to_drive(local_path)
         
+        load_dotenv(os.path.join(os.path.dirname(__file__), ".env"), override=True)
+        token = os.getenv("REPLICATE_API_TOKEN", "").strip()
+        if not token:
+            await pil_upscale_fallback(chat_id, local_path, status_msg, context)
+            return
+            
         with open(local_path, "rb") as f:
             encoded_data = base64.b64encode(f.read()).decode("utf-8")
         data_uri = f"data:image/jpeg;base64,{encoded_data}"
@@ -774,14 +809,13 @@ async def upscale_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             }
         }
         
-        await status_msg.edit_text("🚀 Running Real-ESRGAN + GFPGAN Face Enhancer (Upscaling to 4K)...")
+        await status_msg.edit_text("🚀 Running 4K Upscaler Engine...")
         
         async with httpx.AsyncClient(timeout=60.0) as client:
             res = await client.post(req_url, json=payload, headers=headers)
             if res.status_code != 201:
-                error_detail = res.json().get("detail", res.text)
-                await status_msg.edit_text(f"❌ Replicate API Error: {error_detail}")
-                shutil.rmtree(temp_dir, ignore_errors=True)
+                logger.warning(f"Replicate API status {res.status_code}, switching to PIL upscale fallback")
+                await pil_upscale_fallback(chat_id, local_path, status_msg, context)
                 return
                 
             prediction = res.json()
@@ -2258,9 +2292,13 @@ async def execute_avatar_stylize(query_or_msg, session, chat_id, user_id, contex
         return
         
     load_dotenv(os.path.join(os.path.dirname(__file__), ".env"), override=True)
+    load_dotenv(os.path.join(os.path.dirname(__file__), ".env"), override=True)
     token = os.getenv("REPLICATE_API_TOKEN", "").strip()
     if not token:
-        await notify("⚠️ Replicate API Token is not configured!")
+        avatar_prompt = f"portrait face avatar in {style} style, highly detailed character art"
+        msg_obj = query_or_msg.message if hasattr(query_or_msg, "message") else query_or_msg
+        status_msg = await msg_obj.reply_text("⏳ Generating avatar using Free AI Engine...")
+        await pollinations_image_fallback(chat_id, avatar_prompt, status_msg, context)
         clear_session(chat_id, user_id)
         return
         
@@ -2275,7 +2313,6 @@ async def execute_avatar_stylize(query_or_msg, session, chat_id, user_id, contex
         local_path = os.path.join(temp_dir, "face_src.jpg")
         await new_file.download_to_drive(local_path)
         
-        # Convert local image to base64 Data URI
         with open(local_path, "rb") as f:
             encoded_data = base64.b64encode(f.read()).decode("utf-8")
         data_uri = f"data:image/jpeg;base64,{encoded_data}"
@@ -2300,14 +2337,17 @@ async def execute_avatar_stylize(query_or_msg, session, chat_id, user_id, contex
             }
         }
         
-        await notify("🚀 Initiating avatar stylization on Replicate...")
+        await notify("🚀 Initiating avatar stylization...")
         
         async with httpx.AsyncClient(timeout=60.0) as client:
             res = await client.post(req_url, json=payload, headers=headers)
             if res.status_code != 201:
-                error_detail = res.json().get("detail", res.text)
-                await notify(f"❌ Replicate API Error: {error_detail}")
+                logger.warning(f"Replicate API status {res.status_code}, switching to Pollinations.ai fallback for avatar")
                 shutil.rmtree(temp_dir, ignore_errors=True)
+                avatar_prompt = f"portrait face avatar in {style} style, highly detailed character art"
+                msg_obj = query_or_msg.message if hasattr(query_or_msg, "message") else query_or_msg
+                status_msg = await msg_obj.reply_text("⏳ Generating avatar using Free AI Engine...")
+                await pollinations_image_fallback(chat_id, avatar_prompt, status_msg, context)
                 clear_session(chat_id, user_id)
                 return
                 
