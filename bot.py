@@ -34,9 +34,11 @@ logger = logging.getLogger(__name__)
 load_dotenv()
 BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
+PROXY_URL = os.getenv("PROXY_URL")
 
 if GEMINI_API_KEY:
     genai.configure(api_key=GEMINI_API_KEY)
+
 
 
 # In-memory user sessions tracking: key=(chat_id, user_id), value=dict
@@ -749,11 +751,10 @@ async def execute_operation(msg_or_query, session, chat_id, user_id, context):
 # --- Main Entry Point ---
 
 def main():
-    if not BOT_TOKEN or BOT_TOKEN == "YOUR_BOT_TOKEN_HERE":
-        logger.critical("Error: TELEGRAM_BOT_TOKEN not found in environment variables. Please check your .env file.")
-        sys.exit(1)
-        
-    app = ApplicationBuilder().token(BOT_TOKEN).build()
+    builder = ApplicationBuilder().token(BOT_TOKEN)
+    if PROXY_URL:
+        builder.proxy(PROXY_URL)
+    app = builder.build()
     
     # Register command handlers
     app.add_handler(CommandHandler("start", start_command))
