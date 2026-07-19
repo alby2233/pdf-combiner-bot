@@ -219,6 +219,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.effective_chat.id
     user_id = update.effective_user.id
     data = query.data
+    logger.info(f"handle_callback: chat_id={chat_id}, user_id={user_id}, data='{data}'")
     
     # 1. Menu Navigations
     if data.startswith("menu:"):
@@ -373,6 +374,7 @@ async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.effective_chat.id
     user_id = update.effective_user.id
     is_group = update.effective_chat.type in ["group", "supergroup"]
+    logger.info(f"handle_document: chat_id={chat_id}, user_id={user_id}, file_name='{update.message.document.file_name if update.message.document else None}'")
     
     session = USER_SESSIONS.get((chat_id, user_id))
     
@@ -477,6 +479,7 @@ async def handle_photo(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.effective_chat.id
     user_id = update.effective_user.id
     is_group = update.effective_chat.type in ["group", "supergroup"]
+    logger.info(f"handle_photo: chat_id={chat_id}, user_id={user_id}")
     
     session = USER_SESSIONS.get((chat_id, user_id))
     
@@ -520,6 +523,7 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.effective_chat.id
     user_id = update.effective_user.id
     text = update.message.text.strip()
+    logger.info(f"handle_text: chat_id={chat_id}, user_id={user_id}, text='{text}'")
     
     session = USER_SESSIONS.get((chat_id, user_id))
     
