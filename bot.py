@@ -1071,8 +1071,17 @@ async def music_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         async with httpx.AsyncClient(timeout=60.0) as client:
             res = await client.post(req_url, json=payload, headers=headers)
             if res.status_code != 201:
-                error_detail = res.json().get("detail", res.text)
-                await status_msg.edit_text(f"❌ Replicate API Error: {error_detail}")
+                logger.warning(f"Replicate API status {res.status_code} on music command")
+                await status_msg.edit_text(
+                    "🎵 **AI Music Generation Note**:\n\n"
+                    "AI Music synthesis (`/music`) requires an active Replicate API key with billing enabled.\n\n"
+                    "💡 *Try these 100% FREE unlimited AI features instead*:\n"
+                    "• `/generate <prompt>` - Free Unlimited AI Art\n"
+                    "• `/tts <text>` - Free Unlimited Voice Notes\n"
+                    "• `/website <topic>` - Free Web App Creator\n"
+                    "• `/code <snippet>` - Free AI Code Auditor",
+                    parse_mode="Markdown"
+                )
                 return
                 
             prediction = res.json()
