@@ -164,6 +164,52 @@ async def cancel_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     clear_session(chat_id, user_id)
     await update.message.reply_text("❌ Current operation has been cancelled. Use /start to open the dashboard again.")
 
+async def start_action_command(update: Update, context: ContextTypes.DEFAULT_TYPE, action: str):
+    chat_id = update.effective_chat.id
+    user_id = update.effective_user.id
+    clear_session(chat_id, user_id)
+    
+    session = get_session(chat_id, user_id)
+    session["action"] = action
+    session["temp_dir"] = tempfile.mkdtemp()
+    session["files"] = []
+    session["step"] = "waiting_for_files"
+    
+    prompt_texts = {
+        "merge": "🔗 **Merge PDFs**\nPlease upload **multiple PDF files** one by one. Once you are done, click the **Merge Now** button below.",
+        "split": "✂️ **Split PDF**\nPlease upload the PDF document you want to split.",
+        "rotate": "🔄 **Rotate PDF**\nPlease upload the PDF document you want to rotate.",
+        "layout_settings": "⚙️ **Add Layout Settings**\nPlease upload the PDF document you want to add headers, footers, or page numbers to.",
+        "word2pdf": "📝 **Word ➔ PDF**\nPlease upload your Word document (`.docx` or `.doc`).",
+        "pdf2word": "📥 **PDF ➔ Word**\nPlease upload your PDF document to convert to Word (`.docx`).",
+        "ppt2pdf": "📊 **PPT ➔ PDF**\nPlease upload your PowerPoint presentation (`.pptx` or `.ppt`).",
+        "pdf2ppt": "📥 **PDF ➔ PPT**\nPlease upload your PDF document to convert to PowerPoint (`.pptx`).",
+        "excel2pdf": "📈 **Excel ➔ PDF**\nPlease upload your Excel spreadsheet (`.xlsx` or `.xls`).",
+        "pdf2excel": "📥 **PDF ➔ Excel**\nPlease upload your PDF document to convert to Excel (`.xlsx`).",
+        "ppt2images": "🖼️ **PPT ➔ Images**\nPlease upload your PowerPoint presentation.",
+        "pdf2images": "🖼️ **PDF ➔ Images**\nPlease upload your PDF document.",
+        "images2pdf": "➕ **Images ➔ PDF**\nPlease upload **one or more images** (JPG/PNG). Once you have uploaded all images, click the **Convert Now** button below.",
+    }
+    
+    prompt = prompt_texts.get(action, "Please upload your document.")
+    
+    keyboard = None
+    if action == "merge":
+        keyboard = InlineKeyboardMarkup([[
+            InlineKeyboardButton("🔗 Merge Now", callback_data="process:merge_now"),
+            InlineKeyboardButton("❌ Cancel", callback_data="btn:cancel"),
+        ]])
+    elif action == "images2pdf":
+        keyboard = InlineKeyboardMarkup([[
+            InlineKeyboardButton("➕ Convert Now", callback_data="process:convert_images"),
+            InlineKeyboardButton("❌ Cancel", callback_data="btn:cancel"),
+        ]])
+    else:
+        keyboard = InlineKeyboardMarkup([[InlineKeyboardButton("❌ Cancel", callback_data="btn:cancel")]])
+        
+    await update.message.reply_text(prompt, reply_markup=keyboard, parse_mode="Markdown")
+
+
 # --- Callback Queries (Buttons) ---
 
 async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -760,6 +806,50 @@ def main():
     app.add_handler(CommandHandler("start", start_command))
     app.add_handler(CommandHandler("help", help_command))
     app.add_handler(CommandHandler("cancel", cancel_command))
+    
+    # Generic action commands registration
+    async def cmd_merge(u, c): await start_action_command(u, c, "merge")
+    async def cmd_split(u, c): await start_action_command(u, c, "split")
+    async def cmd_rotate(u, c): await start_action_command(u, c, "rotate")
+    async def cmd_layout(u, c): await start_action_command(u, c, "layout_settings")
+    async def cmd_word2pdf(u, c): await start_action_command(u, c, "word2pdf")
+    async def cmd_pdf2word(u, c): await start_action_command(u, c, "pdf2word")
+    async def cmd_ppt2pdf(u, c): await start_action_command(u, c, "ppt2pdf")
+    async def cmd_pdf2ppt(u, c): await start_action_command(u, c, "pdf2ppt")
+    async def cmd_excel2pdf(u, c): await start_action_command(u, c, "excel2pdf")
+    async def cmd_pdf2excel(u, c): await start_action_command(u, c, "pdf2excel")
+    async def cmd_ppt2images(u, c): await start_action_command(u, c, "ppt2images")
+    async def cmd_pdf2images(u, c): await start_action_command(u, c, "pdf2images")
+    async def cmd_images2pdf(u, c): await start_action_command(u, c, "images2pdf")
+
+    app.add_handler(CommandHandler("merge", cmd_merge))
+    app.add_handler(CommandHandler("split", cmd_split))
+    app.add_handler(CommandHandler("rotate", cmd_rotate))
+    app.add_handler(CommandHandler("layout", cmd_layout))
+    app.add_handler(CommandHandler("layout_settings", cmd_layout))
+    
+    app.add_handler(CommandHandler("word2pdf", cmd_word2pdf))
+    app.add_handler(CommandHandler("word_to_pdf", cmd_word2pdf))
+    app.add_handler(CommandHandler("pdf2word", cmd_pdf2word))
+    app.add_handler(CommandHandler("pdf_to_word", cmd_pdf2word))
+    
+    app.add_handler(CommandHandler("ppt2pdf", cmd_ppt2pdf))
+    app.add_handler(CommandHandler("ppt_to_pdf", cmd_ppt2pdf))
+    app.add_handler(CommandHandler("pdf2ppt", cmd_pdf2ppt))
+    app.add_handler(CommandHandler("pdf_to_ppt", cmd_pdf2ppt))
+    
+    app.add_handler(CommandHandler("excel2pdf", cmd_excel2pdf))
+    app.add_handler(CommandHandler("excel_to_pdf", cmd_excel2pdf))
+    app.add_handler(CommandHandler("pdf2excel", cmd_pdf2excel))
+    app.add_handler(CommandHandler("pdf_to_excel", cmd_pdf2excel))
+    
+    app.add_handler(CommandHandler("ppt2images", cmd_ppt2images))
+    app.add_handler(CommandHandler("ppt_to_images", cmd_ppt2images))
+    app.add_handler(CommandHandler("pdf2images", cmd_pdf2images))
+    app.add_handler(CommandHandler("pdf_to_images", cmd_pdf2images))
+    
+    app.add_handler(CommandHandler("images2pdf", cmd_images2pdf))
+    app.add_handler(CommandHandler("images_to_pdf", cmd_images2pdf))
     
     # Register callback query handler for menus and inline buttons
     app.add_handler(CallbackQueryHandler(handle_callback))
