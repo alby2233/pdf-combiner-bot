@@ -36,7 +36,7 @@ load_dotenv(os.path.join(os.path.dirname(__file__), ".env"))
 BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
 PROXY_URL = os.getenv("PROXY_URL")
-GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
+GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-3.5-flash")
 REPLICATE_API_TOKEN = os.getenv("REPLICATE_API_TOKEN")
 
 CURRENT_IMAGE_MODEL = "black-forest-labs/flux-1.1-pro"
