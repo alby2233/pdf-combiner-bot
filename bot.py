@@ -39,6 +39,9 @@ PROXY_URL = os.getenv("PROXY_URL")
 GEMINI_MODEL = os.getenv("GEMINI_MODEL", "gemini-2.5-flash")
 REPLICATE_API_TOKEN = os.getenv("REPLICATE_API_TOKEN")
 
+CURRENT_IMAGE_MODEL = "black-forest-labs/flux-1.1-pro"
+CURRENT_EDIT_MODEL = "timothybrooks/instruct-pix2pix"
+
 if GEMINI_API_KEY:
     genai.configure(api_key=GEMINI_API_KEY)
 
@@ -173,6 +176,48 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     )
     await update.message.reply_text(welcome_text, reply_markup=get_main_keyboard(), parse_mode="Markdown")
 
+async def generate_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    chat_id = update.effective_chat.id
+    user_id = update.effective_user.id
+    clear_session(chat_id, user_id)
+    
+    prompt = " ".join(context.args).strip()
+    if not prompt:
+        await update.message.reply_text(
+            "🎨 **Generate Image**\n\n"
+            "Please provide a prompt after the command, for example:\n"
+            "`/generate a futuristic city at sunset, highly detailed`",
+            parse_mode="Markdown"
+        )
+        return
+        
+    msg = await update.message.reply_text("⏳ Initializing Replicate image generation...")
+    await generate_image_with_replicate(chat_id, prompt, msg, context)
+
+async def set_model_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    chat_id = update.effective_chat.id
+    user_id = update.effective_user.id
+    clear_session(chat_id, user_id)
+    
+    prompt = (
+        "⚙️ **Select AI Models**\n\n"
+        f"• **Current Image Gen Model**: `{CURRENT_IMAGE_MODEL}`\n"
+        f"• **Current Image Edit Model**: `{CURRENT_EDIT_MODEL}`\n\n"
+        "Choose a model category to customize:"
+    )
+    keyboard = [
+        [
+            InlineKeyboardButton("🎨 Text-to-Image Models", callback_data="set_model_cat:gen"),
+        ],
+        [
+            InlineKeyboardButton("🖼️ Image-to-Image / Edit Models", callback_data="set_model_cat:edit"),
+        ],
+        [
+            InlineKeyboardButton("❌ Close", callback_data="btn:cancel"),
+        ]
+    ]
+    await update.message.reply_text(prompt, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="Markdown")
+
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     help_text = (
         "💡 **PDF & Office Bot Help**\n\n"
@@ -266,6 +311,7 @@ async def start_action_command(update: Update, context: ContextTypes.DEFAULT_TYP
 # --- Callback Queries (Buttons) ---
 
 async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    global CURRENT_IMAGE_MODEL, CURRENT_EDIT_MODEL
     query = update.callback_query
     await query.answer()
     
@@ -427,6 +473,50 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         session["img_convert_format"] = fmt
         await query.edit_message_text(f"⏳ Converting photo format to {fmt.upper()}...")
         await execute_image_operation(query, session, context)
+
+    elif data == "set_model_cat:gen":
+        keyboard = [
+            [InlineKeyboardButton("Flux 1.1 Pro ⚡", callback_data="set_model_select:gen:black-forest-labs/flux-1.1-pro")],
+            [InlineKeyboardButton("Flux 2 Pro 💎", callback_data="set_model_select:gen:black-forest-labs/flux-2-pro")],
+            [InlineKeyboardButton("Google Imagen 4 🌟", callback_data="set_model_select:gen:google/imagen-4")],
+            [InlineKeyboardButton("Flux Kontext Pro 📖", callback_data="set_model_select:gen:black-forest-labs/flux-kontext-pro")],
+            [InlineKeyboardButton("Ideogram v3 Turbo 🚀", callback_data="set_model_select:gen:ideogram-ai/ideogram-v3-turbo")],
+            [InlineKeyboardButton("« Back", callback_data="menu:set_model_back")]
+        ]
+        await query.edit_message_text("🎨 Choose a **Text-to-Image** model:", reply_markup=InlineKeyboardMarkup(keyboard))
+        
+    elif data == "set_model_cat:edit":
+        keyboard = [
+            [InlineKeyboardButton("InstructPix2Pix (Fast Edit) 🖼️", callback_data="set_model_select:edit:timothybrooks/instruct-pix2pix")],
+            [InlineKeyboardButton("Flux 1.1 Pro (Guided Edit) ⚡", callback_data="set_model_select:edit:black-forest-labs/flux-1.1-pro")],
+            [InlineKeyboardButton("« Back", callback_data="menu:set_model_back")]
+        ]
+        await query.edit_message_text("🖼️ Choose an **Image-to-Image / Edit** model:", reply_markup=InlineKeyboardMarkup(keyboard))
+        
+    elif data == "menu:set_model_back":
+        prompt = (
+            "⚙️ **Select AI Models**\n\n"
+            f"• **Current Image Gen Model**: `{CURRENT_IMAGE_MODEL}`\n"
+            f"• **Current Image Edit Model**: `{CURRENT_EDIT_MODEL}`\n\n"
+            "Choose a model category to customize:"
+        )
+        keyboard = [
+            [InlineKeyboardButton("🎨 Text-to-Image Models", callback_data="set_model_cat:gen")],
+            [InlineKeyboardButton("🖼️ Image-to-Image / Edit Models", callback_data="set_model_cat:edit")],
+            [InlineKeyboardButton("❌ Close", callback_data="btn:cancel")]
+        ]
+        await query.edit_message_text(prompt, reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="Markdown")
+        
+    elif data.startswith("set_model_select:gen:"):
+        model_path = data.replace("set_model_select:gen:", "")
+        CURRENT_IMAGE_MODEL = model_path
+        await query.edit_message_text(f"✅ Text-to-Image model has been set to:\n`{model_path}`\n\nUse `/generate <prompt>` to create images!", parse_mode="Markdown")
+        
+    elif data.startswith("set_model_select:edit:"):
+        model_path = data.replace("set_model_select:edit:", "")
+        CURRENT_EDIT_MODEL = model_path
+        await query.edit_message_text(f"✅ Image-to-Image / Edit model has been set to:\n`{model_path}`\n\nSend or reply to photos with prompts to edit them!", parse_mode="Markdown")
+
 
 
 # --- Interactive Layout Config Flow ---
@@ -658,20 +748,31 @@ async def edit_image_with_replicate(chat_id, src_path, prompt, update_msg, conte
             "Content-Type": "application/json"
         }
         
-        payload = {
-            "version": "30c1d0b916a6f8efce20493f5d61ee27491ab2a60437c13c588468b9810ec23f",
-            "input": {
-                "image": data_uri,
-                "prompt": prompt,
-                "num_inference_steps": 25
+        if CURRENT_EDIT_MODEL == "timothybrooks/instruct-pix2pix":
+            req_url = "https://api.replicate.com/v1/predictions"
+            payload = {
+                "version": "30c1d0b916a6f8efce20493f5d61ee27491ab2a60437c13c588468b9810ec23f",
+                "input": {
+                    "image": data_uri,
+                    "prompt": prompt,
+                    "num_inference_steps": 25
+                }
             }
-        }
-        
+        else:
+            owner, model_name = CURRENT_EDIT_MODEL.split("/")
+            req_url = f"https://api.replicate.com/v1/models/{owner}/{model_name}/predictions"
+            payload = {
+                "input": {
+                    "prompt": prompt,
+                    "image_prompt": data_uri
+                }
+            }
+            
         await update_msg.edit_text("🚀 Sending request to Replicate AI...")
         
         async with httpx.AsyncClient(timeout=60.0) as client:
             res = await client.post(
-                "https://api.replicate.com/v1/predictions", 
+                req_url, 
                 json=payload, 
                 headers=headers
             )
@@ -731,6 +832,100 @@ async def edit_image_with_replicate(chat_id, src_path, prompt, update_msg, conte
                     return
             
             await update_msg.edit_text("⏱️ Image editing timed out on Replicate.")
+            
+    except Exception as e:
+        logger.error(f"Replicate API connection error: {e}", exc_info=True)
+        await update_msg.edit_text(f"❌ Error communicating with Replicate: {str(e)}")
+
+async def generate_image_with_replicate(chat_id, prompt, update_msg, context):
+    if not REPLICATE_API_TOKEN:
+        await update_msg.edit_text(
+            "⚠️ **Replicate API Token is not configured!**\n\n"
+            "Please obtain an API token from [Replicate](https://replicate.com) and add it to your `.env` file:\n"
+            "`REPLICATE_API_TOKEN=r8_your_token_here`"
+        )
+        return
+
+    await update_msg.edit_text(f"⏳ Generating image using `{CURRENT_IMAGE_MODEL}`...")
+    
+    try:
+        import httpx
+        import asyncio
+        
+        headers = {
+            "Authorization": f"Token {REPLICATE_API_TOKEN}",
+            "Content-Type": "application/json"
+        }
+        
+        payload = {
+            "input": {
+                "prompt": prompt
+            }
+        }
+        
+        owner, name = CURRENT_IMAGE_MODEL.split("/")
+        
+        async with httpx.AsyncClient(timeout=60.0) as client:
+            res = await client.post(
+                f"https://api.replicate.com/v1/models/{owner}/{name}/predictions", 
+                json=payload, 
+                headers=headers
+            )
+            if res.status_code != 201:
+                error_detail = res.json().get("detail", res.text)
+                await update_msg.edit_text(f"❌ Replicate API Error: {error_detail}")
+                return
+                
+            prediction = res.json()
+            poll_url = prediction["urls"]["get"]
+            
+            await update_msg.edit_text("🎨 Generating your image... (this may take 5-15 seconds)")
+            
+            for _ in range(30):
+                await asyncio.sleep(1.5)
+                poll_res = await client.get(poll_url, headers=headers)
+                if poll_res.status_code != 200:
+                    continue
+                    
+                prediction = poll_res.json()
+                status = prediction["status"]
+                
+                if status == "succeeded":
+                    output_urls = prediction.get("output")
+                    if not output_urls:
+                        await update_msg.edit_text("❌ No output image received from Replicate.")
+                        return
+                    
+                    output_url = output_urls[0] if isinstance(output_urls, list) else output_urls
+                    await update_msg.edit_text("📤 Downloading generated image...")
+                    img_res = await client.get(output_url)
+                    if img_res.status_code != 200:
+                        await update_msg.edit_text("❌ Error downloading generated image.")
+                        return
+                        
+                    out_filename = f"generated_{name}_{hash(prompt) % 10000}.png"
+                    out_path = os.path.join(tempfile.gettempdir(), out_filename)
+                    with open(out_path, "wb") as f_out:
+                        f_out.write(img_res.content)
+                        
+                    await update_msg.edit_text("📤 Sending finished image...")
+                    with open(out_path, "rb") as f_send:
+                        await context.bot.send_photo(
+                            chat_id, 
+                            f_send, 
+                            caption=f"✅ Generated via `{CURRENT_IMAGE_MODEL}`:\n*{prompt}*",
+                            parse_mode="Markdown"
+                        )
+                    await update_msg.delete()
+                    return
+                elif status == "failed":
+                    await update_msg.edit_text(f"❌ Image generation failed: {prediction.get('error', 'unknown error')}")
+                    return
+                elif status == "canceled":
+                    await update_msg.edit_text("❌ Image generation was canceled.")
+                    return
+            
+            await update_msg.edit_text("⏱️ Image generation timed out on Replicate.")
             
     except Exception as e:
         logger.error(f"Replicate API connection error: {e}", exc_info=True)
@@ -1294,6 +1489,8 @@ async def post_init(application):
         BotCommand("img_compress", "Compress image file size"),
         BotCommand("img_convert", "Convert format (JPG/PNG)"),
         BotCommand("img_grayscale", "Convert image to grayscale"),
+        BotCommand("generate", "Generate an image using active AI model"),
+        BotCommand("set_model", "Change Replicate image gen and edit models"),
     ]
     await application.bot.set_my_commands(commands)
 
@@ -1307,6 +1504,9 @@ def main():
     app.add_handler(CommandHandler("start", start_command))
     app.add_handler(CommandHandler("help", help_command))
     app.add_handler(CommandHandler("cancel", cancel_command))
+    app.add_handler(CommandHandler("generate", generate_command))
+    app.add_handler(CommandHandler("generate_image", generate_command))
+    app.add_handler(CommandHandler("set_model", set_model_command))
     
     # Generic action commands registration
     async def cmd_merge(u, c): await start_action_command(u, c, "merge")
