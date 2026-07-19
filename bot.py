@@ -2642,7 +2642,10 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
                 response = await loop.run_in_executor(
                     None, lambda: model.generate_content(prompt)
                 )
-                await update.message.reply_text(response.text, parse_mode="Markdown")
+                try:
+                    await update.message.reply_text(response.text, parse_mode="Markdown")
+                except Exception:
+                    await update.message.reply_text(response.text)
             except Exception as e:
                 logger.error(f"Gemini AI error: {e}")
                 await update.message.reply_text(f"❌ Error communicating with Gemini AI: {str(e)}")
