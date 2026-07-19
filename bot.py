@@ -784,7 +784,7 @@ async def upscale_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         local_path = os.path.join(temp_dir, "upscale_src.jpg")
         await new_file.download_to_drive(local_path)
         
-        load_dotenv(os.path.join(os.path.dirname(__file__), ".env"), override=True)
+        load_dotenv(os.path.join(os.path.dirname(__file__), ".env"), override=False)
         token = os.getenv("REPLICATE_API_TOKEN", "").strip()
         if not token:
             await pil_upscale_fallback(chat_id, local_path, status_msg, context)
@@ -923,7 +923,7 @@ async def tts_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return
         
-    load_dotenv(os.path.join(os.path.dirname(__file__), ".env"), override=True)
+    load_dotenv(os.path.join(os.path.dirname(__file__), ".env"), override=False)
     token = os.getenv("REPLICATE_API_TOKEN", "").strip()
     if not token:
         await gtts_fallback(update, context, args_str, await message.reply_text("⏳ Initializing TTS..."))
@@ -1039,7 +1039,7 @@ async def music_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return
         
-    load_dotenv(os.path.join(os.path.dirname(__file__), ".env"), override=True)
+    load_dotenv(os.path.join(os.path.dirname(__file__), ".env"), override=False)
     token = os.getenv("REPLICATE_API_TOKEN", "").strip()
     if not token:
         await message.reply_text(
@@ -1507,7 +1507,7 @@ async def execute_seminar_generation(query_or_msg, session, chat_id, user_id, co
     topic = session.get("seminar_topic")
     theme = session.get("selected_theme", "clean")
     
-    load_dotenv(os.path.join(os.path.dirname(__file__), ".env"), override=True)
+    load_dotenv(os.path.join(os.path.dirname(__file__), ".env"), override=False)
     if not GEMINI_API_KEY:
         await notify("⚠️ **Gemini API Key is not configured!**")
         clear_session(chat_id, user_id)
@@ -2153,7 +2153,7 @@ async def start_replicate_from_photo_or_doc(update, context, file_id, file_name_
     update_msg = await update.message.reply_text("⏳ Downloading image for AI editing...")
     
     try:
-        load_dotenv(os.path.join(os.path.dirname(__file__), ".env"), override=True)
+        load_dotenv(os.path.join(os.path.dirname(__file__), ".env"), override=False)
         token = os.getenv("REPLICATE_API_TOKEN", "").strip()
         if not token:
             await pollinations_image_fallback(chat_id, prompt, update_msg, context)
@@ -2291,8 +2291,8 @@ async def execute_avatar_stylize(query_or_msg, session, chat_id, user_id, contex
         clear_session(chat_id, user_id)
         return
         
-    load_dotenv(os.path.join(os.path.dirname(__file__), ".env"), override=True)
-    load_dotenv(os.path.join(os.path.dirname(__file__), ".env"), override=True)
+    load_dotenv(os.path.join(os.path.dirname(__file__), ".env"), override=False)
+    load_dotenv(os.path.join(os.path.dirname(__file__), ".env"), override=False)
     token = os.getenv("REPLICATE_API_TOKEN", "").strip()
     if not token:
         avatar_prompt = f"portrait face avatar in {style} style, highly detailed character art"
@@ -2457,7 +2457,7 @@ async def pollinations_image_fallback(chat_id, prompt, update_msg, context):
         await update_msg.edit_text(f"❌ Error generating image: {str(e)}")
 
 async def generate_image_with_replicate(chat_id, prompt, update_msg, context):
-    load_dotenv(os.path.join(os.path.dirname(__file__), ".env"), override=True)
+    load_dotenv(os.path.join(os.path.dirname(__file__), ".env"), override=False)
     token = os.getenv("REPLICATE_API_TOKEN", "").strip()
     if not token:
         await pollinations_image_fallback(chat_id, prompt, update_msg, context)
