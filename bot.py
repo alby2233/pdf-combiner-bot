@@ -570,7 +570,7 @@ async def handle_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
             await update.message.reply_chat_action("typing")
             try:
                 import asyncio
-                model = genai.GenerativeModel("gemini-1.5-flash")
+                model = genai.GenerativeModel("gemini-flash-latest")
                 # Run the blocking Gemini API call in a thread pool executor to keep event loop responsive
                 loop = asyncio.get_running_loop()
                 response = await loop.run_in_executor(
