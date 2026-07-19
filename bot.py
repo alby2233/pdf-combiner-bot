@@ -233,7 +233,7 @@ async def generate_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         return
         
-    msg = await update.message.reply_text("⏳ Initializing Replicate image generation...")
+    msg = await update.message.reply_text("⏳ Initializing AI Image Engine...")
     await generate_image_with_replicate(chat_id, prompt, msg, context)
 
 async def set_model_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -2468,7 +2468,7 @@ async def pollinations_image_fallback(chat_id, prompt, update_msg, context):
 async def generate_image_with_replicate(chat_id, prompt, update_msg, context):
     load_dotenv(os.path.join(os.path.dirname(__file__), ".env"), override=False)
     token = os.getenv("REPLICATE_API_TOKEN", "").strip()
-    if not token:
+    if not token or not token.startswith("r8_"):
         await pollinations_image_fallback(chat_id, prompt, update_msg, context)
         return
 
