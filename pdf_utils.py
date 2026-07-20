@@ -207,14 +207,66 @@ def images_to_pdf(image_paths, pdf_path):
         images[0].save(pdf_path, save_all=True, append_images=images[1:])
 
 def merge_pdfs(file_paths, output_path):
-    """Merge multiple PDF files into a single PDF using pypdf."""
+    """Merge multiple PDF, PPT, Word, Excel, or Image files into a single master PDF using pypdf and fallbacks."""
     from pypdf import PdfWriter
+    import logging
+    logger = logging.getLogger(__name__)
+
     writer = PdfWriter()
+    temp_pdfs = []
+
     for path in file_paths:
-        writer.append(path)
+        ext = os.path.splitext(path)[1].lower()
+        if ext == ".pdf":
+            writer.append(path)
+        elif ext in [".jpg", ".jpeg", ".png"]:
+            temp_pdf = tempfile.mktemp(suffix=".pdf")
+            temp_pdfs.append(temp_pdf)
+            try:
+                images_to_pdf([path], temp_pdf)
+                writer.append(temp_pdf)
+            except Exception as e:
+                logger.error(f"Image to PDF merge error: {e}")
+        elif ext in [".pptx", ".ppt"]:
+            temp_pdf = tempfile.mktemp(suffix=".pdf")
+            temp_pdfs.append(temp_pdf)
+            try:
+                ppt_to_pdf(path, temp_pdf)
+                writer.append(temp_pdf)
+            except Exception as e:
+                logger.error(f"PPT to PDF merge conversion error: {e}")
+        elif ext in [".docx", ".doc"]:
+            temp_pdf = tempfile.mktemp(suffix=".pdf")
+            temp_pdfs.append(temp_pdf)
+            try:
+                word_to_pdf(path, temp_pdf)
+                writer.append(temp_pdf)
+            except Exception as e:
+                logger.error(f"Word to PDF merge conversion error: {e}")
+        elif ext in [".xlsx", ".xls"]:
+            temp_pdf = tempfile.mktemp(suffix=".pdf")
+            temp_pdfs.append(temp_pdf)
+            try:
+                excel_to_pdf(path, temp_pdf)
+                writer.append(temp_pdf)
+            except Exception as e:
+                logger.error(f"Excel to PDF merge conversion error: {e}")
+        else:
+            try:
+                writer.append(path)
+            except Exception as e:
+                logger.error(f"Generic file append error: {e}")
+
     with open(output_path, "wb") as f:
         writer.write(f)
     writer.close()
+
+    for tp in temp_pdfs:
+        try:
+            if os.path.exists(tp):
+                os.remove(tp)
+        except Exception:
+            pass
 
 def split_pdf(pdf_path, page_ranges_str, output_path):
     """Extract page ranges (e.g. '1, 3-5, 8') from a PDF using pypdf."""

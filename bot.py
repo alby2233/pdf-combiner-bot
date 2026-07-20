@@ -1653,7 +1653,7 @@ async def start_action_command(update: Update, context: ContextTypes.DEFAULT_TYP
     session["step"] = "waiting_for_files"
     
     prompt_texts = {
-        "merge": "🔗 **Merge PDFs**\nPlease upload **multiple PDF files** one by one. Once you are done, click the **Merge Now** button below.",
+        "merge": "🔗 **Merge Files (PDF, PPT, Word, Excel, Images)**\nPlease upload **multiple files** (PDF, PPT, Word, Excel, Images) one by one (supports **up to 100 files**). Once done, click **Merge Now** below.",
         "split": "✂️ **Split PDF**\nPlease upload the PDF document you want to split.",
         "rotate": "🔄 **Rotate PDF**\nPlease upload the PDF document you want to rotate.",
         "layout_settings": "⚙️ **Add Layout Settings**\nPlease upload the PDF document you want to add headers, footers, or page numbers to.",
@@ -1744,7 +1744,7 @@ async def handle_callback(update: Update, context: ContextTypes.DEFAULT_TYPE):
         session["files"] = []
         
         prompt_texts = {
-            "merge": "🔗 **Merge PDFs**\nPlease upload **multiple PDF files** one by one. Once you are done, click the **Merge Now** button below.",
+            "merge": "🔗 **Merge Files (PDF, PPT, Word, Excel, Images)**\nPlease upload **multiple files** (PDF, PPT, Word, Excel, Images) one by one (supports **up to 100 files**). Once done, click **Merge Now** below.",
             "split": "✂️ **Split PDF**\nPlease upload the PDF document you want to split.",
             "rotate": "🔄 **Rotate PDF**\nPlease upload the PDF document you want to rotate.",
             "layout_settings": "⚙️ **Add Layout Settings**\nPlease upload the PDF document you want to add headers, footers, or page numbers to.",
@@ -2636,7 +2636,17 @@ async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE):
     
     # 2. Flow route based on action
     if action == "merge":
-        # Let user know we received it, show Merge Now trigger
+        allowed_merge_exts = [".pdf", ".pptx", ".ppt", ".docx", ".doc", ".xlsx", ".xls", ".png", ".jpg", ".jpeg"]
+        if file_ext not in allowed_merge_exts:
+            await update.message.reply_text("⚠️ Invalid file format for merging! Supported: PDF, PPT, Word, Excel, Images (JPG/PNG).")
+            session["files"].pop()
+            return
+            
+        if len(session["files"]) > 100:
+            await update.message.reply_text("⚠️ Limit reached! Maximum 100 files can be merged in a single batch.")
+            session["files"].pop()
+            return
+
         keyboard = InlineKeyboardMarkup([
             [
                 InlineKeyboardButton("🔗 Merge Now", callback_data="process:merge_now"),
@@ -2644,7 +2654,7 @@ async def handle_document(update: Update, context: ContextTypes.DEFAULT_TYPE):
             ]
         ])
         await update.message.reply_text(
-            f"📥 Received `{file_name}`.\n\nTotal files to merge: **{len(session['files'])}**.\nUpload another PDF or click Merge Now.",
+            f"📥 Received `{file_name}`.\n\nTotal files to merge: **{len(session['files'])} / 100**.\nUpload more files (PDF, PPT, Word, Excel, Images) or click **Merge Now**.",
             reply_markup=keyboard,
             parse_mode="Markdown"
         )
