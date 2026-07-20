@@ -63,18 +63,30 @@ def register_active_group_user(update: Update):
     if user.is_bot:
         return
         
+    import time
     name = user.first_name
     username = f"@{user.username}" if user.username else name
-    user_entry = {"id": user.id, "name": name, "username": username}
+    user_entry = {
+        "id": user.id,
+        "name": name,
+        "username": username,
+        "last_seen": time.time()
+    }
     
     if chat_id not in GROUP_ACTIVE_USERS:
-        GROUP_ACTIVE_USERS[chat_id] = []
+        GROUP_ACTIVE_USERS[chat_id] = {}
         
-    GROUP_ACTIVE_USERS[chat_id] = [u for u in GROUP_ACTIVE_USERS[chat_id] if u["id"] != user.id]
-    GROUP_ACTIVE_USERS[chat_id].append(user_entry)
-    
-    if len(GROUP_ACTIVE_USERS[chat_id]) > 30:
-        GROUP_ACTIVE_USERS[chat_id].pop(0)
+    if isinstance(GROUP_ACTIVE_USERS[chat_id], list):
+        old_list = GROUP_ACTIVE_USERS[chat_id]
+        GROUP_ACTIVE_USERS[chat_id] = {u["id"]: u for u in old_list}
+        
+    GROUP_ACTIVE_USERS[chat_id][user.id] = user_entry
+
+def get_group_active_list(chat_id):
+    users_dict = GROUP_ACTIVE_USERS.get(chat_id, {})
+    if isinstance(users_dict, list):
+        return users_dict
+    return list(users_dict.values())
 
 def get_session(chat_id, user_id):
     key = (chat_id, user_id)
@@ -310,6 +322,7 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "• `/tts <text>` - Convert text to voice note/speech using Suno Bark\n"
         "• `/choose <options>` - Randomly pick an option from a list (or pick active group member)\n"
         "• `/members` - View current pool of active group members\n"
+        "• `/inactive [days]` - Audit & list group members inactive for 30 days (1 month)\n"
         "• `/trivia` - Start a Gemini AI-powered quiz poll in the group\n\n"
         "🤖 **Google Gemini & Antigravity AI**:\n"
         "• `/code <snippet>` - Audit code, debug error stack traces & optimize logic\n"
@@ -486,7 +499,7 @@ async def choose_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     input_text = " ".join(context.args) if context.args else ""
     
     if not input_text and is_group:
-        active_list = GROUP_ACTIVE_USERS.get(chat_id, [])
+        active_list = get_group_active_list(chat_id)
         if active_list:
             import random
             import asyncio
@@ -543,7 +556,7 @@ async def active_members_command(update: Update, context: ContextTypes.DEFAULT_T
         await update.message.reply_text("⚠️ This command is only usable inside group chats.")
         return
         
-    active_list = GROUP_ACTIVE_USERS.get(chat_id, [])
+    active_list = get_group_active_list(chat_id)
     if not active_list:
         await update.message.reply_text("👥 No active members recorded in this chat yet. Send some messages to build the pool!")
         return
@@ -555,6 +568,87 @@ async def active_members_command(update: Update, context: ContextTypes.DEFAULT_T
         "💡 *Tip*: Run `/choose` without any parameters to randomly pick one of these members!",
         parse_mode="Markdown"
     )
+
+async def inactive_members_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    chat_id = update.effective_chat.id
+    is_group = update.effective_chat.type in ["group", "supergroup"]
+    
+    if not is_group:
+        await update.message.reply_text("⚠️ `/inactive` can only be used in group chats!", parse_mode="Markdown")
+        return
+        
+    days_threshold = 30
+    if context.args:
+        try:
+            days_threshold = int(context.args[0])
+        except ValueError:
+            days_threshold = 30
+            
+    members_list = get_group_active_list(chat_id)
+    if not members_list:
+        await update.message.reply_text(
+            "📊 **Group Inactivity & Member Audit**\n\n"
+            "⚠️ No group members tracked yet. As members chat in this group, I will automatically record their activity!",
+            parse_mode="Markdown"
+        )
+        return
+        
+    import time
+    now_ts = time.time()
+    seconds_in_day = 86400
+    cutoff_ts = now_ts - (days_threshold * seconds_in_day)
+    
+    active_members = []
+    inactive_members = []
+    
+    for uinfo in members_list:
+        last_seen = uinfo.get("last_seen", now_ts)
+        diff_days = int((now_ts - last_seen) / seconds_in_day)
+        u_copy = dict(uinfo)
+        u_copy["days_ago"] = diff_days
+        
+        if last_seen < cutoff_ts:
+            inactive_members.append(u_copy)
+        else:
+            active_members.append(u_copy)
+            
+    inactive_members.sort(key=lambda x: x["days_ago"], reverse=True)
+    active_members.sort(key=lambda x: x["days_ago"])
+    
+    total_tracked = len(members_list)
+    active_cnt = len(active_members)
+    inactive_cnt = len(inactive_members)
+    active_pct = int((active_cnt / total_tracked) * 100) if total_tracked > 0 else 100
+    
+    lines = [
+        f"📊 **Group Activity & Inactivity Audit Report**",
+        f"📅 **Inactivity Threshold**: `{days_threshold} Days (~1 Month)`",
+        f"👥 **Total Tracked Members**: `{total_tracked}`",
+        f"🟢 **Active Recently**: `{active_cnt}` (`{active_pct}%`)",
+        f"💤 **Inactive (> {days_threshold} Days)**: `{inactive_cnt}` (`{100 - active_pct}%`)\n"
+    ]
+    
+    if inactive_members:
+        lines.append(f"💤 **Members Inactive for >{days_threshold} Days (1 Month)**:")
+        for idx, u in enumerate(inactive_members[:20], 1):
+            lines.append(f"{idx}. {u['name']} ({u['username']}) — Last active `{u['days_ago']}d ago`")
+        if len(inactive_members) > 20:
+            lines.append(f"*(...and {len(inactive_members) - 20} more inactive members)*")
+        lines.append("")
+    else:
+        lines.append(f"🎉 **All tracked members have been active within the last {days_threshold} days!**\n")
+        
+    if active_members:
+        lines.append("⚡ **Top Active Members**:")
+        for idx, u in enumerate(active_members[:5], 1):
+            ago_text = "Today" if u["days_ago"] == 0 else f"{u['days_ago']}d ago"
+            lines.append(f"• {u['name']} ({u['username']}) — `{ago_text}`")
+            
+    report_text = "\n".join(lines)
+    try:
+        await update.message.reply_text(report_text, parse_mode="Markdown")
+    except Exception:
+        await update.message.reply_text(report_text)
 
 async def trivia_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.effective_chat.id
@@ -3415,6 +3509,7 @@ async def post_init(application):
         BotCommand("video_to_gif", "Convert a video clip into animated GIF"),
         BotCommand("images_to_gif", "Combine multiple images into animated GIF"),
         BotCommand("ocr", "Extract text from textbook pages / photos"),
+        BotCommand("inactive", "Audit & list group members inactive for >30 days (1 month)"),
         BotCommand("remove_watermark", "Search and remove specific text watermark from PDF"),
         BotCommand("avatar", "Stylize a face portrait into Claymation, Pixel Art, 3D, etc."),
         BotCommand("music", "Generate 10s custom AI lofi/music beats from text prompt"),
@@ -3446,6 +3541,8 @@ def main():
     app.add_handler(CommandHandler("choose", choose_command))
     app.add_handler(CommandHandler("members", active_members_command))
     app.add_handler(CommandHandler("active", active_members_command))
+    app.add_handler(CommandHandler("inactive", inactive_members_command))
+    app.add_handler(CommandHandler("inactive_members", inactive_members_command))
     app.add_handler(CommandHandler("trivia", trivia_command))
     app.add_handler(CommandHandler("ocr", ocr_command))
     app.add_handler(CommandHandler("avatar", stylize_command))
