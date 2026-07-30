@@ -655,19 +655,23 @@ async def inactive_members_command(update: Update, context: ContextTypes.DEFAULT
 
 async def ff_profile_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     message = update.message
-    uid = " ".join(context.args).strip()
+    args = context.args
     
-    if not uid:
+    if not args:
         await message.reply_text(
             "🎮 **Free Fire Profile Viewer**\n\n"
-            "Please provide a player's UID after the command:\n"
+            "Please provide a player's UID and optional region after the command:\n"
             "• `/ff_profile 12847192`\n"
-            "• `/ff_profile 284719483`",
+            "• `/ff_profile 12847192 IND` (India)\n"
+            "• `/ff_profile 284719483 BR` (Brazil)",
             parse_mode="Markdown"
         )
         return
         
-    status_msg = await message.reply_text(f"🔍 Searching Garena servers for Player UID: `{uid}`...")
+    uid = args[0].strip()
+    region = args[1].upper().strip() if len(args) > 1 else "IND"
+    
+    status_msg = await message.reply_text(f"🔍 Searching Garena servers for Player UID: `{uid}` ({region})...")
     await update.message.reply_chat_action("typing")
     
     player_data = None
@@ -696,7 +700,7 @@ async def ff_profile_command(update: Update, context: ContextTypes.DEFAULT_TYPE)
             name = player_data.get("name") or player_data.get("nickname") or player_data.get("basicInfo", {}).get("nickname", "Unknown Player")
             level = player_data.get("level") or player_data.get("basicInfo", {}).get("level", "72")
             likes = player_data.get("likes") or player_data.get("basicInfo", {}).get("likes", "14,820")
-            region = player_data.get("region") or player_data.get("basicInfo", {}).get("region", "India")
+            region_res = player_data.get("region") or player_data.get("basicInfo", {}).get("region") or region
             guild_name = player_data.get("guildName") or player_data.get("clanName") or "No Guild"
             br_rank = player_data.get("brRank") or "Heroic 🌟"
             cs_rank = player_data.get("csRank") or "Heroic III"
@@ -707,7 +711,7 @@ async def ff_profile_command(update: Update, context: ContextTypes.DEFAULT_TYPE)
                 f"🆔 **UID**: `{uid}`\n"
                 f"📈 **Level**: `{level}`\n"
                 f"👍 **Likes**: `{likes}`\n"
-                f"🌍 **Region**: `{region}`\n"
+                f"🌍 **Region**: `{region_res}`\n"
                 f"🛡️ **Guild**: `{guild_name}`\n\n"
                 f"🏆 **Battle Royale Rank**: `{br_rank}`\n"
                 f"⚔️ **Clash Squad Rank**: `{cs_rank}`\n\n"
@@ -718,21 +722,37 @@ async def ff_profile_command(update: Update, context: ContextTypes.DEFAULT_TYPE)
         except Exception as parse_err:
             logger.warning(f"Error parsing Free Fire API response: {parse_err}")
 
+    # Region mapping helper
+    region_mapping = {
+        "IND": "India",
+        "SG": "Singapore",
+        "BR": "Brazil",
+        "US": "United States",
+        "ME": "Middle East",
+        "PK": "Pakistan",
+        "RU": "Russia",
+        "ID": "Indonesia",
+        "TW": "Taiwan",
+        "VN": "Vietnam",
+        "TH": "Thailand",
+        "CIS": "CIS Region",
+        "BD": "Bangladesh"
+    }
+
     # Helper function to generate mock profile details dynamically
     def get_dynamic_mock_report():
         import random
+        full_region = region_mapping.get(region, region)
         nicknames = ["亗 ɢᴏᴋᴜ 亗", "彡 ᴅᴇsᴛʀᴏʏᴇʀ 彡", "☯ ᴀɴᴛɪɢʀᴀᴠɪᴛʏ ☯", "⚡️ sᴛᴏʀᴍ ⚡️", "🔥 ᴘʜᴏᴇɴɪx 🔥", "👑 K I N G 👑", "☣️ T O X I C ☣️"]
         guilds = ["☯ ᴀɴᴛɪɢʀᴀᴠɪᴛʏ ☯", "⚡️ sᴛᴏʀᴍ ʙʀᴇᴀᴋᴇʀs ⚡️", "🔥 ғɪʀᴇ ʙʟᴀᴅᴇs 🔥", "👑 ʀᴏʏᴀʟs 👑", "⚔️ sᴀᴍᴜʀᴀɪs ⚔️"]
         levels = random.randint(68, 83)
         likes = f"{random.randint(12000, 39000):,}"
-        regions = ["India", "Singapore", "Brazil", "United States", "Middle East", "Pakistan"]
         br_ranks = ["Grandmaster 🌟", "Heroic V", "Heroic IV", "Master 👑"]
         cs_ranks = ["Heroic V", "Heroic III", "Heroic IV", "Master"]
         weapons = ["AK-47 Blue Flame Draco 🐉", "Cobra MP40 🐍", "M1014 Green Flame Draco 🦖", "SCAR Megalodon Alpha 🦈"]
         
         name = random.choice(nicknames)
         guild_name = random.choice(guilds)
-        region = random.choice(regions)
         br_rank = random.choice(br_ranks)
         cs_rank = random.choice(cs_ranks)
         weapon = random.choice(weapons)
@@ -743,7 +763,7 @@ async def ff_profile_command(update: Update, context: ContextTypes.DEFAULT_TYPE)
             f"🆔 **UID**: `{uid}`\n"
             f"📈 **Level**: `{levels}`\n"
             f"👍 **Likes**: `{likes}`\n"
-            f"🌍 **Region**: `{region}`\n"
+            f"🌍 **Region**: `{full_region}`\n"
             f"🛡️ **Guild**: `{guild_name}`\n\n"
             f"🏆 **Battle Royale Rank**: `{br_rank}`\n"
             f"⚔️ **Clash Squad Rank**: `{cs_rank}`\n"
@@ -757,11 +777,13 @@ async def ff_profile_command(update: Update, context: ContextTypes.DEFAULT_TYPE)
 
     try:
         import asyncio
+        full_region = region_mapping.get(region, region)
         prompt = (
-            f"Generate a detailed Garena Free Fire player profile report for UID: {uid}. "
+            f"Generate a detailed Garena Free Fire player profile report for UID: {uid} in region: {full_region}. "
             "Make it sound highly realistic and exciting for a game statistics card. "
             "Use the following parameters:\n"
             "- A cool stylized gaming nickname (e.g. using special symbols like 亗, 彡, ɢᴏᴋᴜ, ☯)\n"
+            f"- Region: {full_region}\n"
             "- Level: between 68 and 82\n"
             "- Likes: between 12,000 and 38,000\n"
             "- Guild name: something cool\n"
