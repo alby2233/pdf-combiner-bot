@@ -823,9 +823,8 @@ async def ff_like_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except Exception as e:
         logger.warning(f"Free Fire Like API call failed: {e}")
         
-    USER_LIKE_COOLDOWNS[cooldown_key] = now
-    
     if success:
+        USER_LIKE_COOLDOWNS[cooldown_key] = now
         success_report = (
             f"✅ **Likes Boost Completed!**\n\n"
             f"👤 **Target UID**: `{uid}`\n"
@@ -835,20 +834,15 @@ async def ff_like_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         )
         await status_msg.edit_text(success_report, parse_mode="Markdown")
         return
-        
-    await status_msg.edit_text("⚙️ Generating G-Coins bypass validation token...")
-    await asyncio.sleep(1.2)
-    await status_msg.edit_text("👍 Transmitting likes payload to Garena game servers...")
-    await asyncio.sleep(1.2)
-    
-    success_report = (
-        f"✅ **Likes Boost Submitted!**\n\n"
-        f"👤 **Target UID**: `{uid}`\n"
-        f"🌍 **Region**: `{region}`\n"
-        f"👍 **Likes Sent**: `+1,500 Likes`\n\n"
-        f"📈 *Note: Garena servers may take up to 24 hours to complete sync. Cooldown limit active!*"
-    )
-    await status_msg.edit_text(success_report, parse_mode="Markdown")
+    else:
+        failure_report = (
+            f"❌ **Likes Boost Failed**\n\n"
+            f"👤 **Target UID**: `{uid}`\n"
+            f"🌍 **Region**: `{region}`\n\n"
+            f"⚠️ **Reason**: Garena's security firewalls have temporarily blocked the public auto-liker server nodes, or the servers are offline. Please try again later!"
+        )
+        await status_msg.edit_text(failure_report, parse_mode="Markdown")
+        return
 
 async def trivia_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.effective_chat.id
