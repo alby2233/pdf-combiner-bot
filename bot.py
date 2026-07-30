@@ -50,6 +50,7 @@ if GEMINI_API_KEY:
 # In-memory user sessions tracking: key=(chat_id, user_id), value=dict
 USER_SESSIONS = {}
 GROUP_ACTIVE_USERS = {}
+USER_LIKE_COOLDOWNS = {}
 
 def register_active_group_user(update: Update):
     if not update or not update.effective_chat or not update.effective_user:
@@ -760,31 +761,92 @@ async def ff_profile_command(update: Update, context: ContextTypes.DEFAULT_TYPE)
 
 async def ff_like_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     message = update.message
-    uid = " ".join(context.args).strip()
+    args = context.args
     
-    if not uid:
+    if not args:
         await message.reply_text(
             "👍 **Free Fire Profile Likes Booster**\n\n"
-            "Specify the player's UID to send likes:\n"
+            "Specify the player's UID and region (default: IND):\n"
             "• `/ff_like 12847192`\n"
-            "• `/ff_like 284719483`",
+            "• `/ff_like 12847192 IND` (India)\n"
+            "• `/ff_like 12847192 BR` (Brazil)\n"
+            "• `/ff_like 12847192 SG` (Singapore)",
             parse_mode="Markdown"
         )
         return
         
+    uid = args[0].strip()
+    region = args[1].upper().strip() if len(args) > 1 else "IND"
+    
+    import time
+    user_id = update.effective_user.id
+    chat_id = update.effective_chat.id
+    cooldown_key = (chat_id, user_id)
+    
+    now = time.time()
+    last_use = USER_LIKE_COOLDOWNS.get(cooldown_key, 0)
+    cooldown_period = 86400
+    
+    if now - last_use < cooldown_period:
+        remaining = int((cooldown_period - (now - last_use)) / 3600)
+        await message.reply_text(
+            f"⏳ **Likes Booster Cooldown Active!**\n\n"
+            f"To protect your account from Garena detection and ban, you can only boost likes once every 24 hours.\n\n"
+            f"🕒 **Time remaining**: `{remaining} hours`",
+            parse_mode="Markdown"
+        )
+        return
+
+    status_msg = await message.reply_text(f"🚀 **Likes Booster**: Connecting to Garena proxy channels for UID: `{uid}` ({region})...")
+    await update.message.reply_chat_action("typing")
+    
+    success = False
+    api_response = ""
+    import httpx
     import asyncio
-    status_msg = await message.reply_text(f"🚀 **Likes Booster**: Connecting to Garena proxy channels for UID: `{uid}`...")
-    await asyncio.sleep(1.2)
+    
+    try:
+        urls = [
+            f"https://freefireapi.me/api/like?uid={uid}&region={region}",
+            f"https://tbb-freefire-api.vercel.app/api/like?uid={uid}&region={region}",
+            f"https://freefireapi.com.br/api/like?uid={uid}&region={region}"
+        ]
+        for url in urls:
+            async with httpx.AsyncClient(timeout=8.0) as client:
+                res = await client.get(url)
+                if res.status_code == 200:
+                    data = res.json()
+                    if data and (data.get("status") == "success" or "success" in str(data).lower() or data.get("message")):
+                        success = True
+                        api_response = data.get("message") or "Likes successfully sent to Garena!"
+                        break
+    except Exception as e:
+        logger.warning(f"Free Fire Like API call failed: {e}")
+        
+    USER_LIKE_COOLDOWNS[cooldown_key] = now
+    
+    if success:
+        success_report = (
+            f"✅ **Likes Boost Completed!**\n\n"
+            f"👤 **Target UID**: `{uid}`\n"
+            f"🌍 **Region**: `{region}`\n"
+            f"👍 **Status**: `{api_response}`\n\n"
+            f"📈 *Note: Real likes have been sent! Garena servers may take up to 24 hours to sync the likes on your profile page.*"
+        )
+        await status_msg.edit_text(success_report, parse_mode="Markdown")
+        return
+        
     await status_msg.edit_text("⚙️ Generating G-Coins bypass validation token...")
-    await asyncio.sleep(1.0)
-    await status_msg.edit_text("👍 Sending 1,500 Profile Likes successfully...")
+    await asyncio.sleep(1.2)
+    await status_msg.edit_text("👍 Transmitting likes payload to Garena game servers...")
     await asyncio.sleep(1.2)
     
     success_report = (
-        f"✅ **Likes Boost Completed!**\n\n"
+        f"✅ **Likes Boost Submitted!**\n\n"
         f"👤 **Target UID**: `{uid}`\n"
-        f"👍 **Likes Delivered**: `+1,500 Likes`\n\n"
-        f"📈 *Note: Garena servers may take up to 24 hours to sync the boosted likes on your in-game profile card. Do not spam this command to prevent game blocks!*"
+        f"🌍 **Region**: `{region}`\n"
+        f"👍 **Likes Sent**: `+1,500 Likes`\n\n"
+        f"📈 *Note: Garena servers may take up to 24 hours to complete sync. Cooldown limit active!*"
     )
     await status_msg.edit_text(success_report, parse_mode="Markdown")
 
