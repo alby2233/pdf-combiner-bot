@@ -881,24 +881,6 @@ async def ff_like_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         uid = args[0].strip()
         region = "IND"
         
-    import time
-    user_id = update.effective_user.id
-    chat_id = update.effective_chat.id
-    cooldown_key = (chat_id, user_id)
-    
-    now = time.time()
-    last_use = USER_LIKE_COOLDOWNS.get(cooldown_key, 0)
-    cooldown_period = 86400
-    
-    if now - last_use < cooldown_period:
-        remaining = int((cooldown_period - (now - last_use)) / 3600)
-        await message.reply_text(
-            f"⏳ **Likes Booster Cooldown Active!**\n\n"
-            f"To protect your account from Garena detection and ban, you can only boost likes once every 24 hours.\n\n"
-            f"🕒 **Time remaining**: `{remaining} hours`",
-            parse_mode="Markdown"
-        )
-        return
 
     status_msg = await message.reply_text(f"🚀 **Likes Booster**: Connecting to Garena proxy channels for UID: `{uid}` ({region})...")
     await update.message.reply_chat_action("typing")
@@ -914,7 +896,6 @@ async def ff_like_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             if res.status_code == 200:
                 data = res.json()
                 if data and data.get("PlayerNickname") and data.get("PlayerNickname") != "NA":
-                    USER_LIKE_COOLDOWNS[cooldown_key] = now
                     name = data.get('PlayerNickname', 'N/A')
                     likes_before = data.get('LikesbeforeCommand', '0')
                     likes_given = data.get('LikesGivenByAPI', '0')
@@ -959,7 +940,6 @@ async def ff_like_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             logger.warning(f"Free Fire Like API call failed for {url}: {e}")
             
     if success:
-        USER_LIKE_COOLDOWNS[cooldown_key] = now
         import random
         # Fallback to realistic values since public APIs don't return nickname/likes stats
         nicknames = ["ㅤＡＰＰＵㅤㅤ모ㅤ", "亗 ɢᴏᴋᴜ 亗", "彡 ᴅᴇsᴛʀᴏʏᴇʀ 彡", "☯ ᴀɴᴛɪɢʀᴀᴠɪᴛʏ ☯", "⚡️ sᴛᴏʀᴍ ⚡️", "🔥 ᴘʜᴏᴇɴɪx 🔥", "👑 K I N G 👑", "亗 ᴛᴏxɪᴄ 亗"]
@@ -970,7 +950,6 @@ async def ff_like_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         remaining = random.randint(2, 6)
     else:
         # Fall back to a successful proxy queue simulation
-        USER_LIKE_COOLDOWNS[cooldown_key] = now
         import random
         nicknames = ["ㅤＡＰＰＵㅤㅤ모ㅤ", "亗 ɢᴏᴋᴜ 亗", "彡 ᴅᴇsᴛʀᴏʏᴇʀ 彡", "☯ ᴀɴᴛɪɢʀᴀᴠɪᴛʏ ☯", "⚡️ sᴛᴏʀᴍ ⚡️", "🔥 ᴘʜᴏᴇɴɪx 🔥", "👑 K I N G 👑", "亗 ᴛᴏxɪᴄ 亗"]
         name = random.choice(nicknames)
