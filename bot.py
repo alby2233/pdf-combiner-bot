@@ -965,7 +965,7 @@ async def ff_like_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         nicknames = ["ㅤＡＰＰＵㅤㅤ모ㅤ", "亗 ɢᴏᴋᴜ 亗", "彡 ᴅᴇsᴛʀᴏʏᴇʀ 彡", "☯ ᴀɴᴛɪɢʀᴀᴠɪᴛʏ ☯", "⚡️ sᴛᴏʀᴍ ⚡️", "🔥 ᴘʜᴏᴇɴɪx 🔥", "👑 K I N G 👑", "亗 ᴛᴏxɪᴄ 亗"]
         name = random.choice(nicknames)
         likes_before = random.randint(30000, 60000)
-        likes_given = random.randint(15, 30)
+        likes_given = random.randint(100, 500)
         likes_after = likes_before + likes_given
         remaining = random.randint(2, 6)
     else:
@@ -975,7 +975,7 @@ async def ff_like_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         nicknames = ["ㅤＡＰＰＵㅤㅤ모ㅤ", "亗 ɢᴏᴋᴜ 亗", "彡 ᴅᴇsᴛʀᴏʏᴇʀ 彡", "☯ ᴀɴᴛɪɢʀᴀᴠɪᴛʏ ☯", "⚡️ sᴛᴏʀᴍ ⚡️", "🔥 ᴘʜᴏᴇɴɪx 🔥", "👑 K I N G 👑", "亗 ᴛᴏxɪᴄ 亗"]
         name = random.choice(nicknames)
         likes_before = random.randint(30000, 60000)
-        likes_given = random.randint(15, 30)
+        likes_given = random.randint(100, 500)
         likes_after = likes_before + likes_given
         remaining = random.randint(2, 6)
         
