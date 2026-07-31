@@ -638,9 +638,6 @@ async def inactive_members_command(update: Update, context: ContextTypes.DEFAULT
         if len(inactive_members) > 20:
             lines.append(f"*(...and {len(inactive_members) - 20} more inactive members)*")
         lines.append("")
-    else:
-        lines.append(f"🎉 **All tracked members have been active within the last {days_threshold} days!**\n")
-        
     if active_members:
         lines.append("⚡ **Top Active Members**:")
         for idx, u in enumerate(active_members[:5], 1):
@@ -656,14 +653,15 @@ async def inactive_members_command(update: Update, context: ContextTypes.DEFAULT
 async def ff_profile_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     message = update.message
     args = context.args
+    chat_id = update.effective_chat.id
     
     if not args:
         await message.reply_text(
             "🎮 **Free Fire Profile Viewer**\n\n"
             "Please provide a player's UID and optional region after the command:\n"
-            "• `/ff_profile 12847192`\n"
+            "• `/info 12847192`\n"
             "• `/ff_profile 12847192 IND` (India)\n"
-            "• `/ff_profile 284719483 BR` (Brazil)",
+            "• `/info 284719483 BR` (Brazil)",
             parse_mode="Markdown"
         )
         return
@@ -687,31 +685,54 @@ async def ff_profile_command(update: Update, context: ContextTypes.DEFAULT_TYPE)
     status_msg = await message.reply_text(f"🔍 Searching Garena servers for Player UID: `{uid}` ({region})...")
     await update.message.reply_chat_action("typing")
     
-    player_data = None
     import httpx
+    from io import BytesIO
+    from datetime import datetime
     
-    # Try the user's working Vercel API first
-    najmi_url = f"https://najmi-ob54-like.vercel.app/like?uid={uid}&server_name={region}&key=NJM"
+    def convert_unix_timestamp(ts):
+        try:
+            if ts and ts > 0:
+                return datetime.utcfromtimestamp(ts).strftime('%d-%m-%Y %H:%M:%S')
+            return "N/A"
+        except:
+            return "N/A"
+            
+    player_data = None
+    
+    # 1. Try raw.thug4ff.xyz API (from KRISHU INFO BOT)
+    thug_url = f"http://raw.thug4ff.xyz/info?uid={uid}&key=great"
     try:
-        async with httpx.AsyncClient(timeout=8.0) as client:
-            res = await client.get(najmi_url)
+        async with httpx.AsyncClient(timeout=12.0) as client:
+            res = await client.get(thug_url)
             if res.status_code == 200:
                 data = res.json()
-                if data and data.get("PlayerNickname") and data.get("PlayerNickname") != "NA":
-                    player_data = {
-                        "name": data.get("PlayerNickname"),
-                        "likes": str(data.get("LikesbeforeCommand") or data.get("LikesafterCommand") or "0"),
-                        "level": str(data.get("Level")) if data.get("Level") and data.get("Level") != "NA" else "80",
-                        "region": str(data.get("Region")) if data.get("Region") and data.get("Region") != "NA" else region.upper(),
-                        "guildName": "☯ ᴀɴᴛɪɢʀᴀᴠɪᴛʏ ☯",
-                        "brRank": "Grandmaster 🌟",
-                        "csRank": "Heroic V"
-                    }
+                if data and not data.get("error"):
+                    player_data = data
     except Exception as e:
-        logger.warning(f"Free Fire Vercel API query failed: {e}")
+        logger.warning(f"Free Fire thug4ff API query failed: {e}")
         
+    # 2. Try Najmi Vercel API fallback
     if not player_data:
-        # Try public API endpoints sequentially
+        najmi_url = f"https://najmi-ob54-like.vercel.app/like?uid={uid}&server_name={region}&key=NJM"
+        try:
+            async with httpx.AsyncClient(timeout=10.0) as client:
+                res = await client.get(najmi_url)
+                if res.status_code == 200:
+                    data = res.json()
+                    if data and data.get("PlayerNickname") and data.get("PlayerNickname") != "NA":
+                        player_data = {
+                            "basicInfo": {
+                                "nickname": data.get("PlayerNickname"),
+                                "liked": str(data.get("LikesbeforeCommand") or data.get("LikesafterCommand") or "0"),
+                                "level": str(data.get("Level")) if data.get("Level") and data.get("Level") != "NA" else "N/A",
+                                "region": str(data.get("Region")) if data.get("Region") and data.get("Region") != "NA" else region.upper()
+                            }
+                        }
+        except Exception as e:
+            logger.warning(f"Free Fire Vercel API query failed: {e}")
+            
+    # 3. Try other public API endpoints sequentially
+    if not player_data:
         urls = [
             f"https://freefireapi.me/api/info/{uid}",
             f"https://tbb-freefire-api.vercel.app/api/info/{uid}",
@@ -719,136 +740,166 @@ async def ff_profile_command(update: Update, context: ContextTypes.DEFAULT_TYPE)
         ]
         for url in urls:
             try:
-                async with httpx.AsyncClient(timeout=4.0) as client:
+                async with httpx.AsyncClient(timeout=6.0, follow_redirects=True) as client:
                     res = await client.get(url)
                     if res.status_code == 200:
                         data = res.json()
-                        if data and (data.get("name") or data.get("nickname") or data.get("basicInfo")):
-                            player_data = data
+                        basic_info = data.get("basicInfo", {})
+                        name = data.get("name") or data.get("nickname") or basic_info.get("nickname")
+                        if name and name != "NA":
+                            player_data = {
+                                "basicInfo": {
+                                    "nickname": name,
+                                    "liked": str(data.get("likes") or basic_info.get("likes") or "0"),
+                                    "level": str(data.get("level") or basic_info.get("level") or "N/A"),
+                                    "region": str(data.get("region") or basic_info.get("region") or region.upper()),
+                                    "bannerId": basic_info.get("bannerId"),
+                                    "createAt": basic_info.get("createAt"),
+                                    "lastLoginAt": basic_info.get("lastLoginAt"),
+                                    "releaseVersion": basic_info.get("releaseVersion"),
+                                    "badgeCnt": basic_info.get("badgeCnt")
+                                },
+                                "clanBasicInfo": {
+                                    "clanName": data.get("guildName") or data.get("clanName") or basic_info.get("guildName")
+                                }
+                            }
                             break
             except Exception as e:
                 logger.warning(f"Free Fire API query failed for {url}: {e}")
-        
+                
     if player_data:
         try:
-            name = player_data.get("name") or player_data.get("nickname") or player_data.get("basicInfo", {}).get("nickname", "Unknown Player")
-            level = player_data.get("level") or player_data.get("basicInfo", {}).get("level", "72")
-            likes = player_data.get("likes") or player_data.get("basicInfo", {}).get("likes", "14,820")
-            region_res = player_data.get("region") or player_data.get("basicInfo", {}).get("region") or region
-            guild_name = player_data.get("guildName") or player_data.get("clanName") or "No Guild"
-            br_rank = player_data.get("brRank") or "Heroic 🌟"
-            cs_rank = player_data.get("csRank") or "Heroic III"
+            basic = player_data.get("basicInfo", {})
+            nickname = basic.get("nickname") or basic.get("PlayerNickname") or "Unknown Player"
+            level = basic.get("level") or "N/A"
+            exp = basic.get("exp") or "N/A"
+            region_res = basic.get("region") or region.upper()
+            likes = basic.get("liked") or basic.get("likes") or "N/A"
+            
+            credit_info = player_data.get("creditScoreInfo", {})
+            honor_score = credit_info.get("creditScore") or "N/A"
+            
+            social = player_data.get("socialInfo", {})
+            signature = social.get("signature") or "None"
+            if len(signature) > 50:
+                signature = signature[:47] + "..."
+                
+            br_rank = basic.get("rank") or "N/A"
+            br_pts = basic.get("rankingPoints") or "N/A"
+            cs_rank = basic.get("csRank") or "N/A"
+            cs_pts = basic.get("csRankingPoints") or "N/A"
+            
+            created_time = convert_unix_timestamp(basic.get("createAt"))
+            last_login = convert_unix_timestamp(basic.get("lastLoginAt"))
+            release_ver = basic.get("releaseVersion") or "N/A"
+            badge_cnt = basic.get("badgeCnt") or "N/A"
             
             report = (
-                f"🎮 **Garena Free Fire Player Profile**\n\n"
-                f"👤 **Name**: `{name}`\n"
-                f"🆔 **UID**: `{uid}`\n"
-                f"📈 **Level**: `{level}`\n"
-                f"👍 **Likes**: `{likes}`\n"
-                f"🌍 **Region**: `{region_res}`\n"
-                f"🛡️ **Guild**: `{guild_name}`\n\n"
-                f"🏆 **Battle Royale Rank**: `{br_rank}`\n"
-                f"⚔️ **Clash Squad Rank**: `{cs_rank}`\n\n"
-                f"✨ *Powered by Antigravity GStats Engine*"
+                f"🎮 **{nickname}**\n"
+                f"**UID:** `{uid}`\n\n"
+                f"📊 **Account Basic Info**\n"
+                f"```\n"
+                f"Level: {level}\n"
+                f"Exp: {exp}\n"
+                f"Region: {region_res}\n"
+                f"Likes: {likes}\n"
+                f"Honor Score: {honor_score}\n"
+                f"Signature: {signature}\n"
+                f"```\n"
+                f"🏆 **Ranks**\n"
+                f"```\n"
+                f"BR Rank: {br_rank}\n"
+                f"BR Points: {br_pts}\n"
+                f"CS Rank: {cs_rank}\n"
+                f"CS Points: {cs_pts}\n"
+                f"```\n"
+                f"⏱️ **Activity**\n"
+                f"```\n"
+                f"Created: {created_time}\n"
+                f"Last Login: {last_login}\n"
+                f"Release: {release_ver}\n"
+                f"Badges: {badge_cnt}\n"
+                f"```"
             )
-            await status_msg.edit_text(report, parse_mode="Markdown")
-            return
-        except Exception as parse_err:
-            logger.warning(f"Error parsing Free Fire API response: {parse_err}")
-
-    # Region mapping helper
-    region_mapping = {
-        "IND": "India",
-        "SG": "Singapore",
-        "BR": "Brazil",
-        "US": "United States",
-        "ME": "Middle East",
-        "PK": "Pakistan",
-        "RU": "Russia",
-        "ID": "Indonesia",
-        "TW": "Taiwan",
-        "VN": "Vietnam",
-        "TH": "Thailand",
-        "CIS": "CIS Region",
-        "BD": "Bangladesh"
-    }
-
-    # Helper function to generate mock profile details dynamically
-    def get_dynamic_mock_report():
-        import random
-        full_region = region_mapping.get(region, region)
-        
-        # Override with real account details for testing/validation
-        if uid == "1238886109":
-            name = "ㅤＡＰＰＵㅤㅤ모ㅤ"
-            levels = 80
-            likes = "42,540"
-            guild_name = "☯ ᴀɴᴛɪɢʀᴀᴠɪᴛʏ ☯"
-            br_rank = "Grandmaster 🌟"
-            cs_rank = "Heroic V"
-            weapon = "Cobra MP40 🐍"
-        else:
-            nicknames = ["亗 ɢᴏᴋᴜ 亗", "彡 ᴅᴇsᴛʀᴏʏᴇʀ 彡", "☯ ᴀɴᴛɪɢʀᴀᴠɪᴛʏ ☯", "⚡️ sᴛᴏʀᴍ ⚡️", "🔥 ᴘʜᴏᴇɴɪx 🔥", "👑 K I N G 👑", "☣️ T O X I C ☣️"]
-            guilds = ["☯ ᴀɴᴛɪɢʀᴀᴠɪᴛʏ ☯", "⚡️ sᴛᴏʀᴍ ʙʀᴇᴀᴋᴇʀs ⚡️", "🔥 ғɪʀᴇ ʙʟᴀᴅᴇs 🔥", "👑 ʀᴏʏᴀʟs 👑", "⚔️ sᴀᴍᴜʀᴀɪs ⚔️"]
-            levels = random.randint(68, 83)
-            likes = f"{random.randint(12000, 39000):,}"
-            br_ranks = ["Grandmaster 🌟", "Heroic V", "Heroic IV", "Master 👑"]
-            cs_ranks = ["Heroic V", "Heroic III", "Heroic IV", "Master"]
-            weapons = ["AK-47 Blue Flame Draco 🐉", "Cobra MP40 🐍", "M1014 Green Flame Draco 🦖", "SCAR Megalodon Alpha 🦈"]
             
-            name = random.choice(nicknames)
-            guild_name = random.choice(guilds)
-            br_rank = random.choice(br_ranks)
-            cs_rank = random.choice(cs_ranks)
-            weapon = random.choice(weapons)
-        
-        return (
-            f"🎮 **Garena Free Fire Player Profile**\n\n"
-            f"👤 **Name**: `{name}`\n"
-            f"🆔 **UID**: `{uid}`\n"
-            f"📈 **Level**: `{levels}`\n"
-            f"👍 **Likes**: `{likes}`\n"
-            f"🌍 **Region**: `{full_region}`\n"
-            f"🛡️ **Guild**: `{guild_name}`\n\n"
-            f"🏆 **Battle Royale Rank**: `{br_rank}`\n"
-            f"⚔️ **Clash Squad Rank**: `{cs_rank}`\n"
-            f"🔫 **Signature Weapon**: `{weapon}`\n\n"
-            f"✨ *Powered by Antigravity GStats Engine (Offline Fallback)*"
-        )
-
-    if not GEMINI_API_KEY:
-        await status_msg.edit_text(get_dynamic_mock_report(), parse_mode="Markdown")
-        return
-
-    try:
-        import asyncio
-        full_region = region_mapping.get(region, region)
-        prompt = (
-            f"Generate a detailed Garena Free Fire player profile report for UID: {uid} in region: {full_region}. "
-            "Make it sound highly realistic and exciting for a game statistics card. "
-            "Use the following parameters:\n"
-            "- A cool stylized gaming nickname (e.g. using special symbols like 亗, 彡, ɢᴏᴋᴜ, ☯)\n"
-            f"- Region: {full_region}\n"
-            "- Level: between 68 and 82\n"
-            "- Likes: between 12,000 and 38,000\n"
-            "- Guild name: something cool\n"
-            "- BR Rank: Grandmaster or Heroic\n"
-            "- CS Rank: Heroic III to V\n"
-            "- A legendary weapon skin (e.g. AK-47 Blue Flame Draco, Cobra MP40, etc.)\n\n"
-            "Format the response exactly as a clean, ready-to-display Markdown card."
-        )
-        model = genai.GenerativeModel(GEMINI_MODEL)
-        loop = asyncio.get_running_loop()
-        response = await loop.run_in_executor(
-            None, lambda: model.generate_content(prompt)
-        )
-        res_text = response.text if hasattr(response, "text") else "Could not retrieve profile stats."
-        report = f"🎮 **Garena Free Fire Player Profile**\n\n{res_text}\n\n✨ *Powered by Antigravity GStats Engine*"
-        await status_msg.edit_text(report, parse_mode="Markdown")
-    except Exception as gemini_err:
-        logger.error(f"Gemini FF profile fallback error: {gemini_err}")
-        # Fallback to dynamic mock report if Gemini fails/rate-limits
-        await status_msg.edit_text(get_dynamic_mock_report(), parse_mode="Markdown")
+            clan = player_data.get("clanBasicInfo")
+            if clan and clan.get("clanName") and clan.get("clanName") not in ["NA", "None", "No Guild"]:
+                c_name = clan.get("clanName")
+                c_level = clan.get("clanLevel") or "N/A"
+                c_mem = clan.get("memberNum") or "0"
+                c_cap = clan.get("capacity") or "0"
+                report += (
+                    f"\n👥 **Clan Info**\n"
+                    f"```\n"
+                    f"Name: {c_name}\n"
+                    f"Level: {c_level}\n"
+                    f"Members: {c_mem}/{c_cap}\n"
+                    f"```"
+                )
+                
+            pet = player_data.get("petInfo")
+            if pet and pet.get("isSelected"):
+                p_name = pet.get("name") or "N/A"
+                p_lvl = pet.get("level") or "N/A"
+                p_exp = pet.get("exp") or "N/A"
+                report += (
+                    f"\n🐾 **Pet Info**\n"
+                    f"```\n"
+                    f"Name: {p_name}\n"
+                    f"Level: {p_lvl}\n"
+                    f"Exp: {p_exp}\n"
+                    f"```"
+                )
+                
+            profile = player_data.get("profileInfo")
+            if profile:
+                avatar = profile.get("avatarId") or "N/A"
+                banner = basic.get("bannerId") or "N/A"
+                skills = profile.get("equipedSkills") or "N/A"
+                report += (
+                    f"\n🎨 **Profile Details**\n"
+                    f"```\n"
+                    f"Avatar ID: {avatar}\n"
+                    f"Banner ID: {banner}\n"
+                    f"Skills: {skills}\n"
+                    f"```"
+                )
+                
+            report += f"\n\n━━━━━━━━━━━━━━━━━━━━\n📝 *SHINKAI X INFO BOT | Data from FreeFire API*"
+            
+            # Try to fetch and send outfit image (from KRISHU INFO BOT)
+            image_url = f"http://profile.thug4ff.xyz/api/profile?uid={uid}"
+            img_sent = False
+            try:
+                async with httpx.AsyncClient(timeout=10.0, follow_redirects=True) as client:
+                    img_res = await client.get(image_url)
+                    if img_res.status_code == 200:
+                        image_data = img_res.content
+                        await context.bot.send_photo(
+                            chat_id=chat_id,
+                            photo=BytesIO(image_data),
+                            caption=report,
+                            parse_mode="Markdown"
+                        )
+                        img_sent = True
+                        await status_msg.delete()
+            except Exception as img_err:
+                logger.warning(f"Outfit image fetch failed: {img_err}")
+                
+            if not img_sent:
+                await status_msg.edit_text(report, parse_mode="Markdown")
+            return
+            
+        except Exception as parse_err:
+            logger.warning(f"Error parsing Free Fire response: {parse_err}")
+            
+    await status_msg.edit_text(
+        f"❌ **Player Not Found**\n\n"
+        f"Could not retrieve player statistics for UID `{uid}` ({region}) from Garena server proxies.\n"
+        f"Please verify the UID and try again later.",
+        parse_mode="Markdown"
+    )
+    return
 
 async def ff_like_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     message = update.message
@@ -881,14 +932,12 @@ async def ff_like_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         uid = args[0].strip()
         region = "IND"
         
-
     status_msg = await message.reply_text(f"🚀 **Likes Booster**: Connecting to Garena proxy channels for UID: `{uid}` ({region})...")
     await update.message.reply_chat_action("typing")
     
-    success = False
     import httpx
     
-    # Try the user's working Vercel API
+    # Try the user's working Vercel API first
     najmi_url = f"https://najmi-ob54-like.vercel.app/like?uid={uid}&server_name={region}&key=NJM"
     try:
         async with httpx.AsyncClient(timeout=10.0) as client:
@@ -921,15 +970,15 @@ async def ff_like_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     except Exception as e:
         logger.warning(f"Free Fire Vercel like API failed: {e}")
 
-    # Try other public API endpoints sequentially
     urls = [
         f"https://freefireapi.me/api/like?uid={uid}&region={region}",
         f"https://tbb-freefire-api.vercel.app/api/like?uid={uid}&region={region}",
         f"https://freefireapi.com.br/api/like?uid={uid}&region={region}"
     ]
+    success = False
     for url in urls:
         try:
-            async with httpx.AsyncClient(timeout=8.0) as client:
+            async with httpx.AsyncClient(timeout=8.0, follow_redirects=True) as client:
                 res = await client.get(url)
                 if res.status_code == 200:
                     data = res.json()
@@ -940,39 +989,19 @@ async def ff_like_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
             logger.warning(f"Free Fire Like API call failed for {url}: {e}")
             
     if success:
-        import random
-        # Fallback to realistic values since public APIs don't return nickname/likes stats
-        nicknames = ["ㅤＡＰＰＵㅤㅤ모ㅤ", "亗 ɢᴏᴋᴜ 亗", "彡 ᴅᴇsᴛʀᴏʏᴇʀ 彡", "☯ ᴀɴᴛɪɢʀᴀᴠɪᴛʏ ☯", "⚡️ sᴛᴏʀᴍ ⚡️", "🔥 ᴘʜᴏᴇɴɪx 🔥", "👑 K I N G 👑", "亗 ᴛᴏxɪᴄ 亗"]
-        name = random.choice(nicknames)
-        likes_before = random.randint(30000, 60000)
-        likes_given = random.randint(100, 500)
-        likes_after = likes_before + likes_given
-        remaining = random.randint(2, 6)
+        await status_msg.edit_text(
+            f"✅ **Likes Booster Success**\n\n"
+            f"Successfully queued likes command for Player UID `{uid}` ({region}) via secondary proxy.\n"
+            f"Please wait a few minutes and check your account profile in-game!",
+            parse_mode="Markdown"
+        )
     else:
-        # Fall back to a successful proxy queue simulation
-        import random
-        nicknames = ["ㅤＡＰＰＵㅤㅤ모ㅤ", "亗 ɢᴏᴋᴜ 亗", "彡 ᴅᴇsᴛʀᴏʏᴇʀ 彡", "☯ ᴀɴᴛɪɢʀᴀᴠɪᴛʏ ☯", "⚡️ sᴛᴏʀᴍ ⚡️", "🔥 ᴘʜᴏᴇɴɪx 🔥", "👑 K I N G 👑", "亗 ᴛᴏxɪᴄ 亗"]
-        name = random.choice(nicknames)
-        likes_before = random.randint(30000, 60000)
-        likes_given = random.randint(100, 500)
-        likes_after = likes_before + likes_given
-        remaining = random.randint(2, 6)
-        
-    template = (
-        "╔════════◇◆◇════════╗\n"
-        "    🎉 LIKE SUCCESSFULLY 👍 \n"
-        "╚════════◇◆◇════════╝\n"
-        f"👑 Name: {name}\n"
-        f"🕹️ UID: {uid}\n"
-        f"🌐 Region: {region.upper()}\n"
-        "━━━━━━━━━━━━━━━━━━━━━\n"
-        f"❤️ Likes Before: {likes_before}\n"
-        f"🩵 Likes Given: {likes_given}\n"
-        f"💚 Likes after: {likes_after}\n"
-        "━━━━━━━━━━━━━━━━━━━━━\n"
-        f"📊 Remaining Requests: {remaining}"
-    )
-    await status_msg.edit_text(template)
+        await status_msg.edit_text(
+            f"❌ **Likes Booster Failed**\n\n"
+            f"Proxy channels are currently busy or the player is on cooldown.\n"
+            f"Please try again later.",
+            parse_mode="Markdown"
+        )
     return
 
 async def trivia_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -3831,6 +3860,7 @@ async def post_init(application):
         BotCommand("choose", "Randomly select one option from a list or pick active member"),
         BotCommand("members", "View list of active group members in the decision pool"),
         BotCommand("ff_profile", "🎮 Search and view Garena Free Fire player profile by UID"),
+        BotCommand("info", "🎮 Search and view Garena Free Fire player profile by UID"),
         BotCommand("ff_like", "👍 Send booster profile likes to Free Fire UID"),
         BotCommand("like", "👍 Send booster profile likes to Free Fire UID"),
         BotCommand("trivia", "Start a group AI quiz poll game"),
@@ -3872,6 +3902,7 @@ def main():
     app.add_handler(CommandHandler("inactive", inactive_members_command))
     app.add_handler(CommandHandler("inactive_members", inactive_members_command))
     app.add_handler(CommandHandler("ff_profile", ff_profile_command))
+    app.add_handler(CommandHandler("info", ff_profile_command))
     app.add_handler(CommandHandler("ff_like", ff_like_command))
     app.add_handler(CommandHandler("like", ff_like_command))
     app.add_handler(CommandHandler("trivia", trivia_command))
